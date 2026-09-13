@@ -51,6 +51,27 @@ if (process.argv.includes('--all')) {
     db.close();
     process.exit(2);
   }
+
+  /* 第二道闸门：即使加了 --yes，若库里存在"看起来是真实业务数据"的客户
+     （名称不含任何测试特征词），也拒绝清空 —— 除非再加 --force。
+     这条闸门是为了防止在已录入真实数据的库上误跑验收脚本。 */
+  const TEST_FEATURE = /测试|验收|探针|演示|复现|验证|诊断|特殊字符|调试|样例/;
+  const allLive = db.prepare('SELECT id, name, short_name FROM customers WHERE deleted_at IS NULL').all();
+  const realOnes = allLive.filter((c) => !TEST_FEATURE.test(c.name) && !TEST_FEATURE.test(c.short_name || ''));
+  if (realOnes.length && !process.argv.includes('--force')) {
+    console.log(`⚠ 检测到 ${realOnes.length} 条**看起来是真实业务数据**的客户（名称不含测试特征词）：`);
+    for (const c of realOnes.slice(0, 15)) console.log(`     #${c.id}  ${c.name}`);
+    if (realOnes.length > 15) console.log(`     …另有 ${realOnes.length - 15} 条`);
+    console.log('\n   --all 会把这些数据一并删除且不可恢复。');
+    console.log('   · 若你确认这些也是测试数据，请加 --force：');
+    console.log('       node tools/cleanup-test-data.js --all --yes --force');
+    console.log('   · 若只想清测试数据、保留真实数据，请改用（不带 --all）：');
+    console.log('       node tools/cleanup-test-data.js');
+    console.log('   · 建议先导出一份备份：设置 → 备份与恢复 → 立即备份');
+    db.close();
+    process.exit(3);
+  }
+
   db.exec('BEGIN');
   try {
     const n = {};

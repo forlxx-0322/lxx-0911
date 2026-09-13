@@ -100,7 +100,8 @@
 
 ```bat
 :: 启动服务（开发模式，前台运行便于看日志）
-set CRM_ROOT=D:\BJXT
+:: CRM_ROOT 指向本项目所在目录，CRM_PORT 可省略（默认 8899）
+set CRM_ROOT=%~dp0
 set CRM_PORT=8899
 node server\server.js
 

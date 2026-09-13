@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 一键运行全部测试套件，汇总各套件通过/失败数量。
  *
  * 运行顺序与依赖（很关键）：
@@ -156,12 +156,25 @@ const summary = [];
     }
   }
 
-  /* 清空业务数据，保证各套件从空库起跑 */
+  /* 清空业务数据，保证各套件从空库起跑。
+     注意：cleanup-test-data.js 会在检测到"看起来是真实业务数据"的客户时拒绝执行
+     （退出码 3），这是为了防止在已录入真实数据的库上误跑验收脚本。
+     这种情况下必须由使用者显式确认，运行器不代为跳过。 */
   if (!process.argv.includes('--no-clean')) {
     console.log('--- 前置：清空业务数据（保留字典与行政区划）');
     const clean = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'cleanup-test-data.js'), '--all', '--yes'],
       { cwd: ROOT, encoding: 'utf8' });
     process.stdout.write((clean.stdout || '') + (clean.stderr || ''));
+    if (clean.status === 3) {
+      console.log('\n已中止：库里存在真实业务数据，未做任何删除。');
+      console.log('全套测试需要从空库起跑。请任选其一：');
+      console.log('  1) 先备份真实数据（设置 → 备份与恢复 → 立即备份），再确认清空后重跑：');
+      console.log('       node tools/cleanup-test-data.js --all --yes --force');
+      console.log('       node tools/run-all-tests.js --no-clean');
+      console.log('  2) 把数据目录切到测试用的空库再跑：设置 CRM_ROOT 指向另一份拷贝');
+      console.log('  3) 只想验证个别功能时，单跑对应套件（它们大多自建自清数据）');
+      process.exit(3);
+    }
     if (clean.status !== 0) {
       console.log('清库失败，终止。');
       process.exit(2);

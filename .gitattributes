@@ -1,0 +1,29 @@
+# 换行符策略
+#
+# .bat 必须保持 CRLF —— 启动器是 UTF-8 无 BOM + CRLF，换行被转换会导致中文乱码或无法执行。
+# 其余文本文件统一按原样存储（本仓库源码以 LF 为主）。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.js   text
+*.json text
+*.md   text
+*.html text
+*.css  text
+
+# 二进制文件不做换行转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.pdf  binary
+*.xlsx binary
+*.db   binary
+
+# vendor 目录是第三方构建产物，diff 里不必统计语言
+web/vendor/** linguist-vendored

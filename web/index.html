@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>客户管理系统</title>
+  <link rel="icon" type="image/svg+xml" href="assets/logo.svg">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="boot">
+    <div class="boot-box">
+      <div class="boot-spinner"></div>
+      <div class="boot-text">正在启动客户管理系统…</div>
+      <div class="boot-hint">正在连接本地服务，请稍候</div>
+    </div>
+  </div>
+
+  <div id="app" style="display:none"></div>
+
+  <!-- 全部第三方库均为本地文件，不引用任何 CDN，保证断网可用 -->
+  <script src="vendor/vue.global.prod.js"></script>
+  <script src="vendor/echarts.min.js"></script>
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="js/util.js"></script>
+  <script src="js/theme.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/router.js"></script>
+  <script src="js/components.js"></script>
+  <script src="js/components2.js"></script>
+  <script src="js/components-chart.js"></script>
+  <script src="js/components-attachment.js"></script>
+  <script src="js/components-map.js"></script>
+  <script src="js/components-coord.js"></script>
+  <script src="js/customer-fields.js"></script>
+  <script src="js/customer-edit.js"></script>
+  <script src="js/followup-drawer.js"></script>
+  <script src="js/project-edit.js"></script>
+  <script src="js/payment-drawer.js"></script>
+  <script src="js/settings-dict.js"></script>
+  <script src="js/settings-backup.js"></script>
+  <script src="js/settings-data.js"></script>
+  <script src="js/settings-attachment.js"></script>
+  <script src="js/settings-misc.js"></script>
+  <script src="js/pages/home.js"></script>
+  <script src="js/pages/customers.js"></script>
+  <script src="js/pages/customer-detail.js"></script>
+  <script src="js/pages/projects.js"></script>
+  <script src="js/pages/project-detail.js"></script>
+  <script src="js/pages/tasks.js"></script>
+  <script src="js/pages/collect.js"></script>
+  <script src="js/pages/settings.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

@@ -17,7 +17,7 @@ if not exist "%RUNFILE%" (
   exit /b 0
 )
 
-rem 优先通过本机接口优雅停机（会先做数据落盘）
+rem Prefer the local API for a graceful shutdown (flushes data first).
 set "RUNPORT=8899"
 for /f "usebackq tokens=2 delims=:," %%a in (`findstr /i "\"port\"" "%RUNFILE%"`) do set "RUNPORT=%%a"
 set "RUNPORT=%RUNPORT: =%"
@@ -31,7 +31,7 @@ if not exist "%RUNFILE%" (
   exit /b 0
 )
 
-rem 兜底：按记录的进程号结束进程（含子进程）
+rem Fallback: kill the recorded process tree.
 for /f "usebackq tokens=2 delims=:," %%a in (`findstr /i "\"pid\"" "%RUNFILE%"`) do set "PID=%%a"
 set "PID=%PID: =%"
 if not "%PID%"=="" (

@@ -180,20 +180,24 @@ window.CRM = window.CRM || {};
         <c-empty v-if="showDup" icon="alert" title="发现可能重复的客户"
                  desc="以下客户与本次录入的名称或电话相同，请确认是否继续创建。" />
 
-        <div v-if="showDup" class="mini-card mt-3" v-for="d in duplicates" :key="d.id">
-          <div class="nm">
-            {{ d.name }}
-            <span class="tag muted">{{ d.match === 'name' ? '同名' : '同电话' }}</span>
+        <!-- 用 template 承载 v-for：Vue 3 里 v-if 与 v-for 同元素时 v-if 优先级更高，
+             官方明确不推荐（且容易误读作用域）。拆成两层后语义清晰。 -->
+        <template v-if="showDup">
+          <div v-for="d in duplicates" :key="d.id" class="mini-card mt-3">
+            <div class="nm">
+              {{ d.name }}
+              <span class="tag muted">{{ d.match === 'name' ? '同名' : '同电话' }}</span>
+            </div>
+            <div class="rows">
+              <div>简称：{{ d.short_name || '—' }}</div>
+              <div>电话：{{ d.phone || '—' }}</div>
+              <div>状态：{{ d.status || '—' }}</div>
+            </div>
+            <div class="mt-3">
+              <button class="btn btn-sm" @click="goDuplicate(d.id)">查看这条记录</button>
+            </div>
           </div>
-          <div class="rows">
-            <div>简称：{{ d.short_name || '—' }}</div>
-            <div>电话：{{ d.phone || '—' }}</div>
-            <div>状态：{{ d.status || '—' }}</div>
-          </div>
-          <div class="mt-3">
-            <button class="btn btn-sm" @click="goDuplicate(d.id)">查看这条记录</button>
-          </div>
-        </div>
+        </template>
 
         <div v-if="!showDup">
           <div v-for="b in blocks" :key="b.key" class="form-block" :style="b.always ? 'margin-top:0;border:none' : ''">

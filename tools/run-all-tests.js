@@ -40,6 +40,7 @@ const SUITES = [
   ['归属地州历史数据纠正', 'tools/test-region-legacy-fix.js'],
   ['归属地州下拉取值', 'tools/test-region-select.js'],
   ['客户详细地址保存', 'tools/test-customer-address.js'],
+  ['客户录入路径（含查重面板）', 'tools/test-customer-create-crash.js'],
   ['批量导入模板内容', 'tools/test-import-template.js'],
   ['批量导入客户（接口）', 'tools/test-import-customers.js'],
   ['批量导入客户（界面）', 'tools/test-import-ui.js'],

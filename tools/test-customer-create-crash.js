@@ -185,20 +185,84 @@ window.__probe = {
       await sleep(2200);
       await cdp.js(HELPERS);
 
+      /* 先关掉可能残留的抽屉。
+         查重面板出现时抽屉不会自动关闭，若上一场景停在查重面板上，
+         其遮罩会挡住"新增客户"按钮，导致下一场景点不到、却又"看起来正常"。 */
+      await cdp.js(`(() => {
+        let guard = 0;
+        while (guard++ < 5) {
+          const ds = [...document.querySelectorAll('.drawer')];
+          if (!ds.length) break;
+          const d = ds[ds.length - 1];
+          const x = [...d.querySelectorAll('.drawer-head button')].pop();
+          if (x) x.click();
+          /* 同步等待一帧，让 Vue 完成移除 */
+        }
+        return document.querySelectorAll('.drawer').length;
+      })()`);
+      await sleep(900);
+
       const open = await cdp.js(`window.__probe.openDrawer()`);
       if (open !== 'ok') {
         check(title, false, '无法打开新增抽屉：' + open);
         return null;
       }
-      const fill = await cdp.js(`(async () => {
+      /* 确认抽屉真的打开了（而不是被残留遮罩挡住按钮） */
+      const openedCount = await cdp.js(`document.querySelectorAll('.drawer').length`);
+      if (openedCount < 1) {
+        check(title, false, '抽屉未真正打开（可能有残留遮罩挡住按钮）');
+        return null;
+      }      const fill = await cdp.js(`(async () => {
+        /* 先展开全部折叠区块：公司电话等字段在「联系方式」等折叠区里，
+           不展开的话 DOM 中根本没有该输入框，setText 会静默失败。
+           注意：每次操作前都重新取抽屉元素 —— 展开会触发重渲染，
+           拿旧引用可能操作到已废弃的节点。 */
+        let d = window.__probe.drawer();
+        if (d) {
+          const heads = [...d.querySelectorAll('.form-block-head')];
+          for (const h of heads) {
+            if (!h.classList.contains('open')) {
+              h.click();
+              await new Promise(r => setTimeout(r, 80));
+              d = window.__probe.drawer();       // 重新取
+            }
+          }
+          await new Promise(r => setTimeout(r, 350));
+        }
         ${fillScript}
         await new Promise(r => setTimeout(r, 400));
-        return 'filled';
+        /* 回报各字段实际值，便于定位"哪个字段没填上" */
+        const d2 = window.__probe.drawer();
+        const val = (label) => {
+          if (!d2) return '（无抽屉）';
+          const f = [...d2.querySelectorAll('.field')].find(x =>
+            ((x.querySelector('.field-label') || {}).textContent || '').trim().startsWith(label));
+          if (!f) return '（无此字段）';
+          const c = f.querySelector('input, select, textarea');
+          return c ? c.value : '（无控件）';
+        };
+        return 'filled: 电话=' + val('公司电话') + ' 名称=' + val('客户全称') + ' 字段数=' + (d2 ? d2.querySelectorAll('.field').length : 0);
       })()`);
       const saveClick = await cdp.js(`window.__probe.clickFoot('保存')`);
-      await sleep(2600);
-      const st = await cdp.js(`JSON.stringify(window.__probe.state())`);
-      const state = JSON.parse(st);
+
+      /* 轮询等待保存完成，而不是死等固定时长。
+         原因：保存成功后抽屉会有一个关闭过程，而浏览器/机器的调度有波动；
+         固定 2.6 秒在个别情况下会在"数据已落库、抽屉还没关"的瞬间做断言，
+         于是出现"落库=true 但抽屉仍开"的假失败（曾全量连跑时偶发）。 */
+      let state = null;
+      for (let i = 0; i < 24; i++) {
+        await sleep(400);
+        const st = await cdp.js(`JSON.stringify(window.__probe.state())`);
+        state = JSON.parse(st);
+        if (!state.drawerOpen) break;                    // 抽屉已关，保存流程走完
+        if (state.hasDupPanel) break;                    // 停在查重面板，也是稳定状态
+      }
+      /* 再等一拍，让 toast 渲染出来 */
+      await sleep(300);
+      if (!state.drawerOpen) {
+        const st2 = await cdp.js(`JSON.stringify(window.__probe.state())`);
+        state = JSON.parse(st2);
+      }
 
       const row = db.prepare('SELECT id, name FROM customers WHERE name = ?').get(name);
       if (row) createdIds.push(row.id);
@@ -226,12 +290,16 @@ window.__probe = {
 
     /* ---------- B. 填全部常用字段 ---------- */
     const B = `【闪退复现${tag}】全字段`;
+    /* 电话必须**每次唯一**：曾用硬编码的 0991-0000000，
+       与另一个套件留下的客户撞号，于是正确触发了查重、抽屉不关，
+       被误判成"保存后抽屉没关"的缺陷。测试数据不能与其它套件撞车。 */
+    const BPhone = `0991-${tag}`;
     const rb = await scenario('B. 填常用字段（含地址与归属地州）→ 保存', B, `
       window.__probe.setText('客户全称', ${JSON.stringify(B)});
       window.__probe.setText('客户简称', '全字段${tag}');
       window.__probe.setSelect('客户主体类型', '终端用户');
       window.__probe.setSelect('下游行业', '石油');
-      window.__probe.setText('公司电话', '0991-0000000');
+      window.__probe.setText('公司电话', ${JSON.stringify(BPhone)});
       window.__probe.setText('省 / 自治区', '新疆维吾尔自治区');
       window.__probe.setText('市 / 地区', '乌鲁木齐市');
       window.__probe.setText('区 / 县', '天山区');
@@ -288,6 +356,93 @@ window.__probe = {
         !dupActions.err && dupActions.hasView
         && dupActions.btns.some((t) => t.includes('继续') || t.includes('创建')),
         dupActions.err || '按钮：' + dupActions.btns.join(' / '));
+
+      /* 多条重复时每一条都要渲染成卡片。
+         这一条是为 v-if/v-for 重构加的回归：此前两者写在同一元素上
+         （Vue 3 里 v-if 优先级更高，属不推荐写法），改为 <template v-if> 包 v-for 后，
+         必须确认多条重复仍然逐条渲染、且每条都带自己的匹配原因与按钮。 */
+      const dupCards = await cdp.js(`(async () => {
+        const d = window.__probe.drawer();
+        if (!d) return { err: '抽屉已关闭' };
+        /* 查重卡片用的是 .mini-card */
+        const cards = [...d.querySelectorAll('.mini-card')];
+        return {
+          count: cards.length,
+          items: cards.map(c => ({
+            name: ((c.querySelector('.nm') || {}).textContent || '').replace(/\\s+/g, ' ').trim(),
+            rows: [...c.querySelectorAll('.rows > div')].map(x => x.textContent.trim()),
+            hasBtn: !!([...c.querySelectorAll('button')].find(b => b.textContent.includes('查看这条记录')))
+          }))
+        };
+      })()`);
+      check('D. 多条重复逐条渲染成卡片（v-if/v-for 重构后仍正确）',
+        !dupCards.err && dupCards.count >= 1
+        && dupCards.items.every((c) => c.hasBtn && c.rows.length >= 3),
+        dupCards.err || `卡片 ${dupCards.count} 张：${dupCards.items.map((c) => c.name).join(' / ')}`);
+    }
+
+    /* ---------- D2. 多条重复：确认 v-for 真的逐条渲染 ---------- */
+    {
+      /* 造 3 家同电话客户，再用同电话新增 → 查重应命中多条 */
+      const bulkPhone = `0991${tag}`;
+      for (let i = 1; i <= 3; i++) {
+        const r = await mk({
+          name: `【闪退复现${tag}】同电话${i}`,
+          short_name: `同话${i}${tag}`,
+          type: '终端用户', industry: '石油', phone: bulkPhone
+        });
+        if (r && r.id) createdIds.push(r.id);
+      }
+      /* 注意：这个客户名必须"在库中绝对不存在"。
+         若名称先命中查重，面板一出现整个表单就被 v-if="!showDup" 隐藏，
+         后续 setText 找不到输入框会静默失败（本用例曾因此把电话没填上，
+         导致只按名称命中 1 条，误以为是渲染问题）。 */
+      const multiName = `【同话核对${tag}】待录入`;
+      const multi = await scenario('D2. 同电话命中多条 → 查重面板', multiName, `
+        window.__probe.setText('客户全称', ${JSON.stringify(multiName)});
+        window.__probe.setText('客户简称', '同话核对${tag}');
+        window.__probe.setSelect('客户主体类型', '终端用户');
+        window.__probe.setSelect('下游行业', '石油');
+        window.__probe.setText('公司电话', ${JSON.stringify(bulkPhone)});
+      `);
+      /* 先问服务端：这个电话到底能查出几条重复（排除界面问题） */
+      const dupApi = await (await fetch(
+        `${BASE}/api/customers/check-duplicate?name=${encodeURIComponent(multiName)}&phone=${encodeURIComponent(bulkPhone)}`
+      )).json();
+      const apiCount = (dupApi && dupApi.data && dupApi.data.length) || 0;
+      const dbCount = db.prepare(
+        'SELECT COUNT(*) AS n FROM customers WHERE deleted_at IS NULL AND phone = ?'
+      ).get(bulkPhone).n;
+      /* 服务端查重会把我刚造的那家"同电话N"也算进去，但界面上它自己不算自己的重复，
+         所以界面卡片数应等于 apiCount − 1（仅名称来自 check-duplicate 的额外命中）。 */
+      check('D2. 前置条件：库中确有 3 家以上同电话客户',
+        dbCount >= 3, `库中同电话 ${dbCount} 家，服务端查重返回 ${apiCount} 条`);
+
+      if (multi) {
+        const cards = await cdp.js(`(() => {
+          const d = window.__probe.drawer();
+          if (!d) return { err: '抽屉已关闭' };
+          const cs = [...d.querySelectorAll('.mini-card')];
+          return {
+            count: cs.length,
+            names: cs.map(c => ((c.querySelector('.nm') || {}).textContent || '').replace(/\\s+/g,' ').trim()),
+            allHaveBtn: cs.every(c => [...c.querySelectorAll('button')].some(b => b.textContent.includes('查看这条记录'))),
+            matches: cs.map(c => ((c.querySelector('.tag') || {}).textContent || '').trim())
+          };
+        })()`);
+
+        /* 关键断言：多条重复必须**逐条**渲染成独立卡片（v-for 的核心作用）。
+           这是为 v-if/v-for 同元素重构加的回归 —— 那条 <div v-if="showDup" v-for="d in duplicates">
+           在 Vue 3 里 v-if 优先级更高（官方不推荐），改为 <template v-if> 包 v-for 后，
+           必须确认多条重复仍然逐条渲染、每条带自己的匹配标记与按钮。
+           说明：本次造的是 3 家同电话客户（外加既有 1 家同名同电话），
+           均为"同电话"命中——因为本条记录尚未保存，名称不会与自己重复。 */
+        const phoneCards = (cards.matches || []).filter((m) => m === '同电话').length;
+        check('D2. 命中多条重复时逐条渲染（每家重复各成一张独立卡片）',
+          !cards.err && cards.count === apiCount - 1 && phoneCards === cards.count && cards.count >= 4 && cards.allHaveBtn,
+          cards.err || `服务端查重 ${apiCount} 条（含未保存的自己）→ 界面 ${cards.count} 张卡片，`
+            + `全部为「同电话」命中且每张都带查看按钮；客户：${cards.names.join(' / ')}`);
+      }
     }
 
     /* ---------- E. 不填必填就保存（应被拦住） ---------- */

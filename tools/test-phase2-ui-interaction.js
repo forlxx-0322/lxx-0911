@@ -280,6 +280,49 @@ class CDP {
       ? `提示：${(inlineAdd.toasts || []).join(' / ') || '无'}；下拉选项数=${inlineAdd.optCount}，含新选项=${inlineAdd.hasOption}`
       : `失败原因：${inlineAdd.why}`);
 
+  /* 本次是"全新选项"，提示必须说「已新增」而不能说「已选用已有选项」。
+     这一条是针对一个真实缺陷加的回归：此前判断"是否已存在"用
+     this.list.includes(r.value)，而 list 已是 {value,label} 对象数组，
+     字符串永远匹配不上，导致两种情况都提示"已新增"。
+     另一半（复用已有选项时应提示"已选用"）在下面第 3.2 段验证。 */
+  check('内联新增全新选项时提示为「已新增选项」',
+    inlineAdd.ok && (inlineAdd.toasts || []).some((t) => t.includes('已新增选项') && t.includes('交互测试行业')),
+    `提示：${(inlineAdd.toasts || []).join(' / ') || '无'}`);
+
+  /* ---------- 3.2 再次内联输入同名选项：应提示「已选用已有选项」 ---------- */
+  const inlineAgain = await cdp.evalJs(`(async () => {
+    const d = document.querySelector('.drawer');
+    if (!d) return { ok: false, why: '无抽屉' };
+    const fields = [...d.querySelectorAll('.field')];
+    const f = fields.find(x => {
+      const l = x.querySelector('.field-label');
+      return l && l.textContent.includes('下游行业');
+    });
+    if (!f) return { ok: false, why: '未找到下游行业字段' };
+    const addBtn = f.querySelector('button[title="新增选项"]');
+    if (!addBtn) return { ok: false, why: '无内联新增按钮' };
+    addBtn.click();
+    await new Promise(r => setTimeout(r, 350));
+    const input = f.querySelector('input');
+    if (!input) return { ok: false, why: '点击后未出现输入框' };
+    input.value = '交互测试行业';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 120));
+    const saveBtn = [...f.querySelectorAll('button')].find(b => b.textContent.includes('保存'));
+    if (!saveBtn) return { ok: false, why: '未找到保存按钮' };
+    saveBtn.click();
+    await new Promise(r => setTimeout(r, 1400));
+    const toasts = [...document.querySelectorAll('.toast')].map(t => t.textContent.trim());
+    const sel = f.querySelector('select');
+    return { ok: true, toasts, selected: sel ? sel.value : '' };
+  })()`);
+
+  check('内联输入已存在的同名选项时提示为「已选用已有选项」（不误报为已新增）',
+    inlineAgain.ok
+    && (inlineAgain.toasts || []).some((t) => t.includes('已选用已有选项') && t.includes('交互测试行业'))
+    && !(inlineAgain.toasts || []).some((t) => t.includes('已新增选项')),
+    inlineAgain.ok ? `提示：${(inlineAgain.toasts || []).join(' / ') || '无'}；已选中=「${inlineAgain.selected}」` : `失败原因：${inlineAgain.why}`);
+
   /* 顺带清理本次新增的测试行业选项，避免污染字典 */
   try {
     const d = await (await fetch(BASE + '/api/dict')).json();

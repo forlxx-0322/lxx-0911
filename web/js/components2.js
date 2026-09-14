@@ -399,9 +399,20 @@ window.CRM = window.CRM || {};
           this.$emit('update:modelValue', r.value);
           this.adding = false;
           this.newValue = '';
-          /* 已在下拉列表中才提示「已选用」，否则视为新增成功（曾被删除的选项会被复活） */
-          const alreadyListed = this.list.includes(r.value);
-          CRM.toast(alreadyListed ? `已选用已有选项「${r.value}」` : `已新增选项「${r.value}」`, 'success');
+
+          /* 用服务端返回的 existed 判断，而不是在前端猜。
+             此前写法是 this.list.includes(r.value)，但 list 已是 {value,label} 对象数组，
+             字符串永远匹配不上，导致"复用已有选项"也提示成"已新增"。
+             服务端 /api/dict/quick-add 的语义：
+               existed=false           → 确实新建了
+               existed=true            → 已存在，直接选用
+               existed=true + reenabled → 已存在但之前被停用，本次重新启用 */
+          let tip;
+          if (!r.existed) tip = `已新增选项「${r.value}」`;
+          else if (r.reenabled) tip = `「${r.value}」之前已停用，已重新启用并选用`;
+          else if (r.restored) tip = `「${r.value}」已恢复并选用`;
+          else tip = `已选用已有选项「${r.value}」`;
+          CRM.toast(tip, 'success');
         } catch (e) {
           CRM.toast(e.message || '新增失败', 'error');
         } finally {

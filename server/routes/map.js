@@ -50,6 +50,15 @@ module.exports = async function mapRoutes(ctx) {
     return ok(r);
   }
 
+  /* ---------- 客户坐标点（地图散点图层） ---------- */
+  if (sub === 'customer-points' && method === 'GET') {
+    return ok(mapService.customerPoints(db, {
+      code: query.code || '',
+      limit: query.limit,
+      sort: query.sort
+    }));
+  }
+
   /* ---------- 边界数据（前端注册 ECharts 地图用） ---------- */
   if (sub === 'geojson' && method === 'GET') {
     const code = query.code || '650000';

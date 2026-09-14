@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 数据库层 —— 客户管理系统
  *
  * 职责：
@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 /* ------------------------------------------------------------------ */
 /* 13 张表结构                                                          */
@@ -351,6 +351,53 @@ const TABLES = [
     detail      TEXT NOT NULL DEFAULT '',
     item_count  INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL
+  )`,
+
+  /* 17. 报价单主表（v5 新增）
+   * 报价合计 total_amount 由服务端按明细重算后写入，不接受手工填写。 */
+  `CREATE TABLE IF NOT EXISTS quotations (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id       INTEGER NOT NULL,
+    customer_id      INTEGER,
+    quote_no         TEXT NOT NULL DEFAULT '',
+    version          INTEGER NOT NULL DEFAULT 1,
+    parent_id        INTEGER,
+    quote_date       TEXT NOT NULL DEFAULT '',
+    valid_until      TEXT NOT NULL DEFAULT '',
+    currency         TEXT NOT NULL DEFAULT '人民币',
+    status           TEXT NOT NULL DEFAULT '草稿',
+    total_amount     REAL NOT NULL DEFAULT 0,
+    tax_note         TEXT NOT NULL DEFAULT '',
+    delivery_note    TEXT NOT NULL DEFAULT '',
+    payment_note     TEXT NOT NULL DEFAULT '',
+    competitor       TEXT NOT NULL DEFAULT '',
+    competitor_price REAL NOT NULL DEFAULT 0,
+    lose_reason      TEXT NOT NULL DEFAULT '',
+    remark           TEXT NOT NULL DEFAULT '',
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL,
+    deleted_at       TEXT
+  )`,
+
+  /* 18. 报价明细行（v5 新增） */
+  `CREATE TABLE IF NOT EXISTS quotation_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    quotation_id    INTEGER NOT NULL,
+    seq             INTEGER NOT NULL DEFAULT 1,
+    item_name       TEXT NOT NULL DEFAULT '',
+    valve_type      TEXT NOT NULL DEFAULT '',
+    size_range      TEXT NOT NULL DEFAULT '',
+    pressure_rating TEXT NOT NULL DEFAULT '',
+    body_material   TEXT NOT NULL DEFAULT '',
+    connection_type TEXT NOT NULL DEFAULT '',
+    quantity        REAL NOT NULL DEFAULT 0,
+    unit            TEXT NOT NULL DEFAULT '台',
+    unit_price      REAL NOT NULL DEFAULT 0,
+    discount        REAL NOT NULL DEFAULT 0,
+    subtotal        REAL NOT NULL DEFAULT 0,
+    delivery_days   INTEGER NOT NULL DEFAULT 0,
+    remark          TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL
   )`];
 
 /* ------------------------------------------------------------------ */
@@ -396,7 +443,14 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_logs_created             ON activity_logs(created_at)',
   'CREATE INDEX IF NOT EXISTS idx_dict_category            ON dict(category, sort)',
   'CREATE INDEX IF NOT EXISTS idx_dict_deleted             ON dict(deleted_at)',
-  'CREATE INDEX IF NOT EXISTS idx_region_parent            ON region(parent_code)'
+  'CREATE INDEX IF NOT EXISTS idx_region_parent            ON region(parent_code)',
+  /* 报价单索引：按项目查列表、按客户跨项目比价、按状态筛选用 */
+  'CREATE INDEX IF NOT EXISTS idx_quotations_project       ON quotations(project_id)',
+  'CREATE INDEX IF NOT EXISTS idx_quotations_customer      ON quotations(customer_id)',
+  'CREATE INDEX IF NOT EXISTS idx_quotations_status        ON quotations(status)',
+  'CREATE INDEX IF NOT EXISTS idx_quotations_no            ON quotations(quote_no)',
+  'CREATE INDEX IF NOT EXISTS idx_quotations_deleted       ON quotations(deleted_at)',
+  'CREATE INDEX IF NOT EXISTS idx_quo_items_quotation      ON quotation_items(quotation_id, seq)'
 ];
 
 /* ------------------------------------------------------------------ */
@@ -613,6 +667,98 @@ const MIGRATIONS = [
 
       return `新增表 ${created.join('、')}；项目表新增列 ${added.join('、') || '无'}；预置来源 ${presetAdded} 个（默认禁用）`;
     }
+  },
+
+  /* v4 → v5：报价单管理
+   * 新增 quotations（报价单主表）与 quotation_items（明细行）两张表。
+   * 纯建表，不改动任何既有表的列，因此可安全回退（删表即可，数据无损失）。 */
+  {
+    version: 5,
+    note: '新增报价单管理：quotations / quotation_items 两张表',
+    run(db) {
+      const created = [];
+
+      db.exec(`CREATE TABLE IF NOT EXISTS quotations (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id       INTEGER NOT NULL,
+        customer_id      INTEGER,
+        quote_no         TEXT NOT NULL DEFAULT '',
+        version          INTEGER NOT NULL DEFAULT 1,
+        parent_id        INTEGER,
+        quote_date       TEXT NOT NULL DEFAULT '',
+        valid_until      TEXT NOT NULL DEFAULT '',
+        currency         TEXT NOT NULL DEFAULT '人民币',
+        status           TEXT NOT NULL DEFAULT '草稿',
+        total_amount     REAL NOT NULL DEFAULT 0,
+        tax_note         TEXT NOT NULL DEFAULT '',
+        delivery_note    TEXT NOT NULL DEFAULT '',
+        payment_note     TEXT NOT NULL DEFAULT '',
+        competitor       TEXT NOT NULL DEFAULT '',
+        competitor_price REAL NOT NULL DEFAULT 0,
+        lose_reason      TEXT NOT NULL DEFAULT '',
+        remark           TEXT NOT NULL DEFAULT '',
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL,
+        deleted_at       TEXT
+      )`);
+      created.push('quotations');
+
+      db.exec(`CREATE TABLE IF NOT EXISTS quotation_items (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        quotation_id    INTEGER NOT NULL,
+        seq             INTEGER NOT NULL DEFAULT 1,
+        item_name       TEXT NOT NULL DEFAULT '',
+        valve_type      TEXT NOT NULL DEFAULT '',
+        size_range      TEXT NOT NULL DEFAULT '',
+        pressure_rating TEXT NOT NULL DEFAULT '',
+        body_material   TEXT NOT NULL DEFAULT '',
+        connection_type TEXT NOT NULL DEFAULT '',
+        quantity        REAL NOT NULL DEFAULT 0,
+        unit            TEXT NOT NULL DEFAULT '台',
+        unit_price      REAL NOT NULL DEFAULT 0,
+        discount        REAL NOT NULL DEFAULT 0,
+        subtotal        REAL NOT NULL DEFAULT 0,
+        delivery_days   INTEGER NOT NULL DEFAULT 0,
+        remark          TEXT NOT NULL DEFAULT '',
+        created_at      TEXT NOT NULL
+      )`);
+      created.push('quotation_items');
+
+      for (const sql of [
+        'CREATE INDEX IF NOT EXISTS idx_quotations_project   ON quotations(project_id)',
+        'CREATE INDEX IF NOT EXISTS idx_quotations_customer  ON quotations(customer_id)',
+        'CREATE INDEX IF NOT EXISTS idx_quotations_status    ON quotations(status)',
+        'CREATE INDEX IF NOT EXISTS idx_quotations_no        ON quotations(quote_no)',
+        'CREATE INDEX IF NOT EXISTS idx_quotations_deleted   ON quotations(deleted_at)',
+        'CREATE INDEX IF NOT EXISTS idx_quo_items_quotation  ON quotation_items(quotation_id, seq)'
+      ]) db.exec(sql);
+
+      /* 报价单状态字典：与客户状态等一样进字典表，便于后续自定义 */
+      const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      const statuses = [
+        ['草稿', '#94a3b8', 10],
+        ['已报出', '#3b82f6', 20],
+        ['已中标', '#22c55e', 30],
+        ['已落标', '#ef4444', 40],
+        ['已过期', '#a8a29e', 50]
+      ];
+      let dictAdded = 0;
+      const findDict = db.prepare('SELECT id, deleted_at FROM dict WHERE category = ? AND value = ?');
+      const insDict = db.prepare(
+        `INSERT INTO dict (category, value, color, sort, enabled, is_system, created_at, updated_at)
+         VALUES ('quotation_status', ?, ?, ?, 1, 1, ?, ?)`
+      );
+      for (const [v, color, sort] of statuses) {
+        const hit = findDict.get('quotation_status', v);
+        if (!hit) { insDict.run(v, color, sort, now, now); dictAdded++; }
+        else if (hit.deleted_at) {
+          db.prepare('UPDATE dict SET deleted_at = NULL, enabled = 1, updated_at = ? WHERE id = ?').run(now, hit.id);
+          dictAdded++;
+        }
+      }
+
+      return `新增表 ${created.join('、')}；预置报价单状态字典 ${dictAdded} 项`;
+    }
   }
 ];
 
@@ -719,6 +865,26 @@ const SETTINGS_SEED = [
   ['company_name', '', '我方公司名称'],
   ['port', '8899', '服务端口'],
   ['follow_remind_days', '3', '跟进提醒提前天数'],
+  ['follow_remind_time', '09:00', '每天开始提醒的时间'],
+  ['follow_remind_quiet', '18:00', '几点后不再弹新提醒（角标保留）'],
+  ['follow_remind_on_start', '1', '启动时立即检查一次（补未开机漏掉的）'],
+  ['remind_email_on', '0', '是否启用邮件提醒（默认关闭）'],
+  ['remind_email_time', '08:30', '每天发送提醒邮件的时间'],
+  ['remind_email_to', '', '提醒邮件收件地址（留空则发给发件人自己）'],
+  ['smtp_provider', 'qq', 'SMTP 服务商预设'],
+  ['smtp_host', 'smtp.qq.com', 'SMTP 服务器地址'],
+  ['smtp_port', '465', 'SMTP 端口（465 隐式 TLS）'],
+  ['smtp_user', '', 'SMTP 登录账号（邮箱地址）'],
+  ['smtp_pass', '', 'SMTP 授权码（不是登录密码）'],
+  ['quote_no_prefix', 'BJ', '报价单号前缀'],
+  ['quote_company', '', '报价单抬头公司名（留空用「我方公司名称」）'],
+  ['quote_contact', '', '报价单联系方式'],
+  /* 邮件提醒的运行时状态（由 notify 模块维护，便于重启后仍能判断与降级） */
+  ['remind_email_fail_streak', '0', '邮件提醒连续失败次数'],
+  ['remind_email_last_at', '', '邮件提醒上次尝试时间'],
+  ['remind_email_last_ok', '', '邮件提醒上次是否成功'],
+  ['remind_email_last_msg', '', '邮件提醒上次结果说明'],
+  ['remind_email_last_day', '', '邮件提醒上次发送日期（当日去重）'],
   ['payment_remind_days', '7', '回款提醒提前天数'],
   ['birthday_remind', '1', '是否启用生日提醒'],
   ['page_size', '20', '列表每页条数'],

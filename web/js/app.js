@@ -111,6 +111,7 @@
   CRM.registerAttachmentComponent(app);
   CRM.registerMapComponent(app);
   CRM.registerCoordComponent(app);
+  if (CRM.registerQuotationComponent) CRM.registerQuotationComponent(app);
   app.component('c-customer-edit', CRM.pages.CustomerEdit);
   app.component('c-followup-drawer', CRM.pages.FollowupDrawer);
   app.component('c-project-edit', CRM.pages.ProjectEdit);

@@ -46,7 +46,11 @@ window.CRM = window.CRM || {};
         /* 下钻层级（面包屑） */
         stack: [],
         mapOption: {},
-        topCities: []
+        topCities: [],
+        /* 客户坐标点（散点图层） */
+        points: [],
+        pointMeta: null,
+        showPoints: true
       };
     },
     computed: {
@@ -117,7 +121,8 @@ window.CRM = window.CRM || {};
         this.currentName = '新疆维吾尔自治区';
         this.stack = [];
         const name = await this.ensureMap(PROVINCE_CODE);
-        this.draw(name, this.dist.cities, PROVINCE_CODE);
+        await this.loadPoints(PROVINCE_CODE);
+        this.draw(name, this.dist.cities, PROVINCE_CODE, this.points);
         this.selected = null;
         this.selectedCustomers = [];
       },
@@ -155,7 +160,8 @@ window.CRM = window.CRM || {};
           this.stack = [{ code: PROVINCE_CODE, name: '新疆维吾尔自治区' }];
           this.currentCode = code;
           this.currentName = regionName || rc.region.name;
-          this.draw(name, data, code);
+          await this.loadPoints(code);
+          this.draw(name, data, code, this.points);
         } catch (e) {
           CRM.toast(e.message || '下钻失败', 'error');
         } finally {
@@ -172,7 +178,9 @@ window.CRM = window.CRM || {};
 
       /* ---------------- 渲染 ---------------- */
 
-      draw(mapName, data, code) {
+      draw(mapName, data, code, points) {
+        /* 散点图层的数据在调用前加载好（见 renderProvince / drillDown） */
+        this.points = points || [];
         const counts = data.map((d) => Number(d.customer_count) || 0);
         const max = Math.max(1, ...counts);
         const C = CRM.theme.colors();
@@ -243,16 +251,121 @@ window.CRM = window.CRM || {};
               value: Number(d.customer_count) || 0,
               code: d.code
             }))
-          }]
+          }, this.pointSeries(mapName)]
         };
 
         this.mapCode = code;
         this.mapData = data;
       },
 
-      /** 点击区域 */
+      /**
+       * 客户散点图层。
+       *
+       * 为什么单独一层：地州色块只能看出"哪片多"，看不出"客户具体在哪"。
+       * 用户录了经纬度却看不到点，等于白录。
+       *
+       * 只画**有坐标**的客户：没有坐标的画到地州中心会误导，
+       * 这类客户由侧栏提示"该地州另有 N 家未录坐标"。
+       */
+      pointSeries(mapName) {
+        const pts = this.points || [];
+        const C = CRM.theme.colors();
+        const showLabels = pts.length <= 30;      // 点少时才显示名字，多了会糊
+        return {
+          type: 'scatter',
+          name: '客户位置',
+          coordinateSystem: 'geo',
+          geoIndex: 0,
+          z: 5,
+          symbolSize: (val, params) => {
+            const d = params && params.data ? params.data : {};
+            const demand = Number(d.demand) || 0;
+            const deal = Number(d.deal) || 0;
+            /* 5~14px：按年需求量与成交额取较大者分级 */
+            const base = Math.max(demand / 200, deal / 1000000);
+            return Math.max(5, Math.min(14, 5 + base * 4));
+          },
+          itemStyle: {
+            color: (params) => {
+              const lv = String((params.data && params.data.level) || '');
+              if (lv.startsWith('A')) return '#d92d3f';
+              if (lv.startsWith('B')) return '#3b82f6';
+              return '#8a95a8';
+            },
+            borderColor: C.tooltipBg === '#ffffff' ? '#ffffff' : '#ffffff',
+            borderWidth: 1.4,
+            opacity: 0.92
+          },
+          label: {
+            show: showLabels,
+            position: 'right',
+            fontSize: 10,
+            color: C.seriesLabel,
+            formatter: (p) => (p.data && p.data.short) || ''
+          },
+          emphasis: {
+            scale: 1.5,
+            label: { show: true, fontSize: 11, fontWeight: 'bold', color: C.seriesLabel }
+          },
+          tooltip: {
+            formatter: (p) => {
+              const d = p.data || {};
+              const lines = [`<b>${d.short || d.name || ''}</b>`];
+              if (d.fullName && d.fullName !== d.short) lines.push(d.fullName);
+              if (d.level) lines.push(`等级：${d.level}`);
+              if (d.demand) lines.push(`年需求：${d.demand} 万元`);
+              if (d.deal) lines.push(`成交额：${CRM.util.fmtMoney(d.deal)} 元`);
+              if (d.projects) lines.push(`项目：${d.projects} 个`);
+              lines.push('<span style="opacity:.7">点击查看客户详情</span>');
+              return lines.join('<br/>');
+            }
+          },
+          data: pts.map((p) => ({
+            name: p.short_name || p.name,
+            fullName: p.name,
+            value: [p.lng, p.lat],
+            id: p.id,
+            short: p.short_name || p.name,
+            level: p.level || '',
+            demand: Number(p.annual_demand) || 0,
+            deal: Number(p.deal_amount) || 0,
+            projects: Number(p.project_count) || 0
+          }))
+        };
+      },
+
+      /** 加载客户坐标点（省级取前 N，下钻到地州取该地州全部） */
+      async loadPoints(code) {
+        try {
+          const r = await CRM.api.customerPoints({ code: code || PROVINCE_CODE, limit: 300 });
+          this.points = r.list || [];
+          this.pointMeta = {
+            total: r.total_with_coords,
+            returned: r.returned,
+            omitted: r.omitted,
+            withoutCoords: r.without_coords,
+            abnormal: r.abnormal || []
+          };
+        } catch (e) {
+          this.points = [];
+          this.pointMeta = null;
+        }
+      },
+
+      /** 点击客户点：进入客户详情 */
+      onPointClick(params) {
+        const d = params && params.data;
+        if (d && d.id) CRM.router.navigate(`/customers/${d.id}`);
+      },
+
+      /** 点击区域或客户点 */
       async onMapClick(params) {
-        if (!params || !params.name) return;
+        if (!params) return;
+        /* 散点图层的点击 → 进客户详情（与区域点击区分开） */
+        if (params.seriesType === 'scatter' || (params.componentType === 'series' && params.seriesType === 'scatter')) {
+          return this.onPointClick(params);
+        }
+        if (!params.name) return;
         const hit = (this.mapData || []).find((d) => d.name === params.name);
 
         if (this.currentCode === PROVINCE_CODE) {
@@ -310,7 +423,7 @@ window.CRM = window.CRM || {};
       },
 
       resetView() {
-        this.draw(this.instanceName, this.mapData, this.mapCode);
+        this.draw(this.instanceName, this.mapData, this.mapCode, this.points);
         this.$nextTick(() => this.resize());
       },
 
@@ -322,7 +435,7 @@ window.CRM = window.CRM || {};
       /** 用当前层级数据重绘（主题切换、视图重置都走这里） */
       redraw() {
         if (!this.mapData) return;
-        this.draw(this.instanceName, this.mapData, this.mapCode);
+        this.draw(this.instanceName, this.mapData, this.mapCode, this.points);
         this.$nextTick(() => this.resize());
       },
 
@@ -441,6 +554,37 @@ window.CRM = window.CRM || {};
                     <span class="rank-num">{{ c.customer_count }}</span>
                   </div>
                 </div>
+                <!-- 客户坐标点覆盖情况：说明图上的点是什么、哪些客户没点 -->
+                <div v-if="pointMeta && pointMeta.total" class="note" style="margin-top:12px">
+                  <c-icon name="check" :size="15" />
+                  <div style="font-size:var(--fs-xs)">
+                    地图上的圆点是<strong>已录经纬度</strong>的客户，共
+                    <strong>{{ pointMeta.total }}</strong> 家（点大小≈年需求量/成交额，颜色=客户等级）。
+                    <template v-if="pointMeta.omitted">
+                      <br>为免拥挤，当前只显示前 <strong>{{ pointMeta.returned }}</strong> 家，
+                      另有 {{ pointMeta.omitted }} 家未显示（下钻到地州可看到该地州全部）。
+                    </template>
+                    <template v-if="pointMeta.withoutCoords">
+                      <br>还有 <strong>{{ pointMeta.withoutCoords }}</strong> 家客户没录经纬度，
+                      因此不画点（画在地州中心会误导），补录坐标后即可精确定位。
+                    </template>
+                  </div>
+                </div>
+
+                <!-- 坐标异常的客户：明显不在新疆范围内 -->
+                <div v-if="pointMeta && pointMeta.abnormal.length" class="note warn" style="margin-top:10px">
+                  <c-icon name="alert" :size="15" />
+                  <div style="font-size:var(--fs-xs)">
+                    有 <strong>{{ pointMeta.abnormal.length }}</strong> 家客户的坐标不在新疆范围内，
+                    已跳过绘制（可能录错或经纬度填反了）：
+                    <div v-for="a in pointMeta.abnormal.slice(0, 5)" :key="a.id" class="unassigned-row">
+                      <span class="ua-name">{{ a.short_name || a.name }}</span>
+                      <span class="muted">{{ a.longitude }}, {{ a.latitude }}</span>
+                      <button class="btn btn-sm" @click="openCustomer(a)">去修正</button>
+                    </div>
+                  </div>
+                </div>
+
                 <div v-if="dist && dist.unassigned.customer_count" class="note warn" style="margin-top:12px">
                   <c-icon name="alert" :size="15" />
                   <div style="font-size:var(--fs-xs)">

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 前端公共组件库
  * 阶段二新增：提示条 / 抽屉 / 确认框 / 表格 / 分页 / 表单控件 / 下拉选择
  */
@@ -88,7 +88,8 @@ window.CRM = window.CRM || {};
   /* ------------------------------------------------------------------ */
 
   const confirmState = reactive({
-    open: false, title: '', message: '', danger: false, okText: '确定', _resolve: null
+    open: false, title: '', message: '', danger: false,
+    okText: '确定', cancelText: '取消', _resolve: null
   });
 
   function confirmBox(options) {
@@ -97,6 +98,8 @@ window.CRM = window.CRM || {};
     confirmState.message = opts.message || '';
     confirmState.danger = !!opts.danger;
     confirmState.okText = opts.okText || (opts.danger ? '删除' : '确定');
+    /* 支持自定义取消文案：像「回填项目 / 暂不」这种二选一，明确文案比「取消」更清楚 */
+    confirmState.cancelText = opts.cancelText || '取消';
     confirmState.open = true;
     return new Promise((resolve) => { confirmState._resolve = resolve; });
   }
@@ -133,7 +136,7 @@ window.CRM = window.CRM || {};
             </div>
             <div class="modal-body" v-html="state.message"></div>
             <div class="modal-foot">
-              <button class="btn" @click="settleConfirm(false)">取消</button>
+              <button class="btn" @click="settleConfirm(false)">{{ state.cancelText }}</button>
               <button class="btn" :class="state.danger ? 'btn-danger' : 'btn-primary'"
                       @click="settleConfirm(true)">{{ state.okText }}</button>
             </div>
@@ -731,6 +734,10 @@ window.CRM = window.CRM || {};
     app.component('c-switch', SwitchField);
     app.component('c-tag-picker', TagPicker);
     app.component('c-ref-select', RefSelect);
+    /* 顶栏跟进提醒：定义在 js/reminders.js（后加载），故做存在性判断 */
+    if (CRM.components && CRM.components.ReminderBell) {
+      app.component('c-reminder-bell', CRM.components.ReminderBell);
+    }
   };
 
 })(window.CRM);

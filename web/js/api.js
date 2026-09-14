@@ -128,6 +128,30 @@ window.CRM = window.CRM || {};
     status: () => request('GET', '/api/status'),
     openDataDir: () => request('POST', '/api/open-data-dir'),
 
+    /* 提醒 */
+    remindersDue: () => request('GET', '/api/reminders/due'),
+    remindSettings: () => request('GET', '/api/reminders/settings'),
+    saveRemindSettings: (data) => request('PUT', '/api/reminders/settings', data),
+    emailStatus: () => request('GET', '/api/reminders/email-status'),
+    testEmail: () => request('POST', '/api/reminders/test-email'),
+    sendReminderNow: () => request('POST', '/api/reminders/send-now'),
+
+    /* 地图客户坐标点 */
+    customerPoints: (params) => request('GET', '/api/map/customer-points?' + toQuery(params)),
+
+    /* 报价单 */
+    listQuotations: (params) => request('GET', '/api/quotations?' + toQuery(params)),
+    getQuotation: (id) => request('GET', `/api/quotations/${id}`),
+    saveQuotation: (data) => data.id
+      ? request('PUT', `/api/quotations/${data.id}`, data)
+      : request('POST', '/api/quotations', data),
+    copyQuotation: (id) => request('POST', `/api/quotations/${id}/copy`),
+    setQuotationStatus: (id, payload) => request('POST', `/api/quotations/${id}/status`, payload),
+    applyQuotationToProject: (id) => request('POST', `/api/quotations/${id}/apply-to-project`),
+    deleteQuotation: (id) => request('DELETE', `/api/quotations/${id}`),
+    quotationExportData: (id) => request('GET', `/api/quotations/${id}/export`),
+    quotationStatuses: () => request('GET', '/api/quotations/statuses'),
+
     /* 客户 */
     listCustomers: (params) => request('GET', '/api/customers?' + toQuery(params)),
     getCustomer: (id) => request('GET', `/api/customers/${id}`),

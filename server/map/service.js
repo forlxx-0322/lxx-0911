@@ -282,6 +282,129 @@ function regionCustomers(db, code, limit) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 客户坐标点（地图上的散点图层）                                       */
+/* ------------------------------------------------------------------ */
+
+/** 全疆视图默认最多显示多少个点（避免上千个点糊成一片） */
+const POINT_LIMIT_DEFAULT = 300;
+const POINT_LIMIT_MAX = 1000;
+/** 新疆大致经纬度范围，用于识别明显录错的坐标 */
+const XINJIANG_BBOX = { minLng: 73, maxLng: 97, minLat: 34, maxLat: 50 };
+
+/**
+ * 有坐标的客户清单（供地图散点图层使用）。
+ *
+ * 设计取舍：
+ *   - **只返回有经纬度的客户**。只有地州归属、没有坐标的客户如果画在地州中心，
+ *     会让人以为客户真的在那，属于误导；这类客户改由侧栏提示"该地州另有 N 家未录坐标"。
+ *   - 点数超过上限时，按**成交额 / 年需求量**取前 N 个，并如实返回被省略的数量，
+ *     界面上明确标注，不做静默裁剪。
+ *   - 坐标明显超出新疆范围的单独标记为异常，不参与绘制。
+ *
+ * @param {object} db
+ * @param {object} opts { code: 行政区划代码（省级或地州级）, limit, sort }
+ */
+function customerPoints(db, opts) {
+  const o = opts || {};
+  const code = String(o.code || '').trim();
+  const limit = Math.min(Math.max(Number(o.limit) || POINT_LIMIT_DEFAULT, 1), POINT_LIMIT_MAX);
+  /* 排序依据：成交额优先，其次年需求量（都是"这家客户有多重要"的代理指标） */
+  const sort = o.sort === 'demand' ? 'demand' : 'deal';
+
+  const where = ['c.deleted_at IS NULL'];
+  const params = [];
+
+  if (code) {
+    /* 地州级：直接按 region_code；省级或空：不限 */
+    const region = db.prepare('SELECT code, name, level FROM region WHERE code = ?').get(code);
+    if (region && region.level === 'district') {
+      /* 传了县市级代码：按该县所属父级地州收窄，保持与色块图一致的分组口径 */
+      where.push('c.region_code = ?');
+      params.push(String(region.parent_code || ''));
+    } else if (region && region.level === 'city') {
+      where.push('c.region_code = ?');
+      params.push(region.code);
+    }
+    /* 省级代码（650000）与未知代码：不加区域条件，返回全部有点客户 */
+  }
+
+  /* 坐标有效性：两个都要是有限数字，且落在新疆范围内 */
+  where.push('c.longitude IS NOT NULL AND c.latitude IS NOT NULL');
+  where.push('CAST(c.longitude AS REAL) <> 0 AND CAST(c.latitude AS REAL) <> 0');
+  where.push('CAST(c.longitude AS REAL) BETWEEN ? AND ?');
+  params.push(XINJIANG_BBOX.minLng, XINJIANG_BBOX.maxLng);
+  where.push('CAST(c.latitude AS REAL) BETWEEN ? AND ?');
+  params.push(XINJIANG_BBOX.minLat, XINJIANG_BBOX.maxLat);
+
+  const whereSql = 'WHERE ' + where.join(' AND ');
+  const orderSql = sort === 'demand'
+    ? 'ORDER BY COALESCE(c.annual_demand,0) DESC, COALESCE(c.deal_amount,0) DESC, c.id DESC'
+    : 'ORDER BY COALESCE(c.deal_amount,0) DESC, COALESCE(c.annual_demand,0) DESC, c.id DESC';
+
+  /* 先数总数（用于判断是否需要省略） */
+  const totalWithCoords = db.prepare(
+    `SELECT COUNT(*) AS n FROM customers c ${whereSql}`
+  ).get(...params).n;
+
+  /* 再数"有归属但没坐标"的数量，供侧栏提示 */
+  const regionFilter = [];
+  const regionParams = [];
+  if (code) {
+    const region = db.prepare('SELECT code, name, level FROM region WHERE code = ?').get(code);
+    if (region && region.level === 'city') { regionFilter.push('c.region_code = ?'); regionParams.push(region.code); }
+    else if (region && region.level === 'district') { regionFilter.push('c.region_code = ?'); regionParams.push(String(region.parent_code || '')); }
+  }
+  const noCoordWhere = [
+    'c.deleted_at IS NULL',
+    '(c.longitude IS NULL OR c.latitude IS NULL OR CAST(c.longitude AS REAL) = 0 OR CAST(c.latitude AS REAL) = 0)',
+    ...regionFilter
+  ].join(' AND ');
+  const withoutCoords = db.prepare(
+    `SELECT COUNT(*) AS n FROM customers c WHERE ${noCoordWhere}`
+  ).get(...regionParams).n;
+
+  const rows = plainAll(db.prepare(`
+    SELECT c.id, c.name, c.short_name, c.level, c.status, c.type, c.industry,
+           CAST(c.longitude AS REAL) AS lng,
+           CAST(c.latitude AS REAL) AS lat,
+           c.city, c.district, c.region_code, c.region_name,
+           c.deal_amount, c.annual_demand,
+           (SELECT COUNT(*) FROM projects p WHERE p.customer_id = c.id AND p.deleted_at IS NULL) AS project_count
+    FROM customers c
+    ${whereSql}
+    ${orderSql}
+    LIMIT ?
+  `).all(...params, limit));
+
+  /* 坐标异常：在新疆范围内但明显成对颠倒的（纬度 > 90 已被范围过滤，这里补充经度纬度互换的检测） */
+  const abnormal = plainAll(db.prepare(`
+    SELECT c.id, c.name, c.short_name, c.longitude, c.latitude
+    FROM customers c
+    WHERE c.deleted_at IS NULL
+      AND c.longitude IS NOT NULL AND c.latitude IS NOT NULL
+      AND (CAST(c.longitude AS REAL) <> 0 AND CAST(c.latitude AS REAL) <> 0)
+      AND NOT (CAST(c.longitude AS REAL) BETWEEN ? AND ? AND CAST(c.latitude AS REAL) BETWEEN ? AND ?)
+  `).all(XINJIANG_BBOX.minLng, XINJIANG_BBOX.maxLng, XINJIANG_BBOX.minLat, XINJIANG_BBOX.maxLat))
+    .map((r) => Object.assign(r, { reason: '坐标不在新疆范围内，可能录错或经纬度填反' }));
+
+  return {
+    code: code || '',
+    sort,
+    limit,
+    total_with_coords: totalWithCoords,
+    returned: rows.length,
+    omitted: Math.max(totalWithCoords - rows.length, 0),
+    without_coords: withoutCoords,
+    abnormal,
+    list: rows.map((r) => Object.assign(r, {
+      deal_amount: Number(r.deal_amount) || 0,
+      annual_demand: Number(r.annual_demand) || 0,
+      project_count: Number(r.project_count) || 0
+    }))
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* 坐标相关辅助                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -358,5 +481,6 @@ module.exports = {
   nearestRegions,
   status,
   clearCache,
-  coord
+  coord,
+  customerPoints
 };

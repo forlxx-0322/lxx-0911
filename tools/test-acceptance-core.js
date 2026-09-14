@@ -186,11 +186,17 @@ const created = [];
       batExists && !hasBom,
       `文件 ${batBuf.length} 字节，BOM=${hasBom ? '有(异常)' : '无'}`);
 
-    check(1.2, '启动.bat 含完整启动逻辑（Node 检测 / 版本校验 / 端口探测 / 单实例探测 / 自动开浏览器）',
+    /* 1.2 说明：
+       - 1.11 起启动器去掉了"端口预检查"（netstat 管道在分离进程下会挂死），
+         改由服务端自己扫描端口；单实例探测改为优先读 data/.run.json 记录的端口。
+       - URL 在实际 bat 里是带引号的（start "" "http://..."），
+         故用 /start\s+""\s+"?http/ 兼容带引号与不带引号两种写法。 */
+    check(1.2, '启动.bat 含完整启动逻辑（Node 检测 / 版本校验 / 单实例探测 / 服务端自选端口 / 自动开浏览器）',
       batText.includes('chcp 65001') && batText.includes('node -v')
-        && /22/.test(batText) && /start "" http/.test(batText)
-        && batText.includes(':findport') && batText.includes(':probe'),
-      '五个关键环节齐全');
+        && /22/.test(batText) && /start\s+""\s+"?http/.test(batText)
+        && batText.includes(':probe') && batText.includes('curl')
+        && batText.includes('.run.json'),
+      '关键环节齐全（含 .run.json 单实例探测与 curl 健康检查）');
 
     /* 实测：停掉服务，按 .bat 的等价流程启动，量到"可访问"的总耗时 */
     killServer();

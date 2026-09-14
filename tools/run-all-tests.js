@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 一键运行全部测试套件，汇总各套件通过/失败数量。
  *
  * 运行顺序与依赖（很关键）：
@@ -43,6 +43,13 @@ const SUITES = [
   ['批量导入模板内容', 'tools/test-import-template.js'],
   ['批量导入客户（接口）', 'tools/test-import-customers.js'],
   ['批量导入客户（界面）', 'tools/test-import-ui.js'],
+  /* 1.11 新增 */
+  ['跟进提醒（界面）', 'tools/test-remind-ui.js'],
+  ['邮件提醒（SMTP）', 'tools/test-notify-email.js'],
+  ['提醒与偏好设置页', 'tools/test-prefs-ui.js'],
+  ['地图客户点', 'tools/test-map-points.js'],
+  ['报价单服务层', 'tools/test-quotation-service.js'],
+  ['报价单全流程', 'tools/test-quotation-flow.js'],
   /* 招标采集模块：不联网，用本地模拟 IMAP 服务器跑真实协议 */
   ['招标采集 · MIME 解析', 'tools/test-collect-mail.js'],
   ['招标采集 · IMAP 客户端', 'tools/test-collect-imap.js'],

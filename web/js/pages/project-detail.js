@@ -25,7 +25,17 @@ window.CRM = window.CRM || {};
         taskTitle: '',
         taskDue: '',
         taskPriority: '中',
-        savingTask: false
+        savingTask: false,
+        /* 报价单 */
+        quotations: [],
+        quotationsLoading: false,
+        quotationOpen: false,
+        editingQuotation: null,
+        /* 落标登记抽屉 */
+        loseOpen: false,
+        loseTarget: null,
+        loseForm: { competitor: '', competitor_price: '', lose_reason: '' },
+        loseSaving: false
       };
     },
     computed: {
@@ -33,6 +43,7 @@ window.CRM = window.CRM || {};
         const p = this.project;
         return [
           { key: 'basic', label: '基本信息' },
+          { key: 'quotations', label: '报价单', badge: this.quotations.length },
           { key: 'plans', label: '回款计划', badge: p ? p.plans.length : 0 },
           { key: 'receipts', label: '实收流水', badge: p ? p.receipts.length : 0 },
           { key: 'tasks', label: '待办', badge: p ? p.summary.task_count : 0 },
@@ -79,10 +90,163 @@ window.CRM = window.CRM || {};
         try {
           await CRM.api.loadDict();
           this.project = await CRM.api.getProject(this.id);
+          await this.loadQuotations();
         } catch (e) {
           this.error = e.message || '加载失败';
         } finally {
           this.loading = false;
+        }
+      },
+
+      /* ---------------- 报价单 ---------------- */
+      async loadQuotations() {
+        this.quotationsLoading = true;
+        try {
+          const r = await CRM.api.listQuotations({ project_id: this.id });
+          this.quotations = r.list || [];
+        } catch (e) {
+          this.quotations = [];
+        } finally {
+          this.quotationsLoading = false;
+        }
+      },
+      openQuotation() {
+        this.editingQuotation = null;
+        this.quotationOpen = true;
+      },
+      async editQuotation(row) {
+        try {
+          this.editingQuotation = await CRM.api.getQuotation(row.id);
+          this.quotationOpen = true;
+        } catch (e) {
+          CRM.toast(e.message || '读取报价单失败', 'error');
+        }
+      },
+      async onQuotationSaved() { await this.loadQuotations(); },
+
+      statusClass(s) {
+        if (s === '已中标') return 'success';
+        if (s === '已落标') return 'danger';
+        if (s === '已报出') return 'warning';
+        if (s === '已过期') return 'muted';
+        return '';
+      },
+
+      /** 复制为新版本 */
+      async copyQuotation(row) {
+        const ok = await CRM.confirm({
+          title: '复制为新版本',
+          message: `将以「${row.quote_no}」为基础创建一个新版本（版本号 +1，状态重置为草稿）。<br>原单保留，可随时对比。`,
+          okText: '复制'
+        });
+        if (!ok) return;
+        try {
+          const r = await CRM.api.copyQuotation(row.id);
+          CRM.toast(`已创建 V${r.version}（${r.quote_no}）`, 'success');
+          await this.loadQuotations();
+        } catch (e) {
+          CRM.toast(e.message || '复制失败', 'error');
+        }
+      },
+
+      /** 删除报价单（软删除，进回收站） */
+      async removeQuotation(row) {
+        const ok = await CRM.confirm({
+          title: '删除报价单',
+          message: `确定删除报价单「${row.quote_no}」（V${row.version}）吗？<br>删除后进入回收站，可还原。`,
+          okText: '删除',
+          danger: true
+        });
+        if (!ok) return;
+        try {
+          await CRM.api.deleteQuotation(row.id);
+          CRM.toast('已删除', 'success');
+          await this.loadQuotations();
+        } catch (e) {
+          CRM.toast(e.message || '删除失败', 'error');
+        }
+      },
+
+      /**
+       * 改状态。中标时额外询问是否把报价合计回填到项目合同额。
+       *
+       * 这是本模块唯一会改动项目金额的入口，因此做成"两步确认"：
+       * 先确认改状态，中标时再单独确认回填（并列出将改动的字段）。
+       */
+      async changeStatus(row, status) {
+        if (row.status === status) return;
+
+        let extra = {};
+        if (status === '已落标') {
+          /* 落标要登记竞对信息，用抽屉收集（单值 prompt 不够用） */
+          this.loseTarget = row;
+          this.loseForm = { competitor: row.competitor || '', competitor_price: row.competitor_price || '', lose_reason: row.lose_reason || '' };
+          this.loseOpen = true;
+          return;
+        }
+
+        try {
+          const r = await CRM.api.setQuotationStatus(row.id, { status });
+          CRM.toast(`报价单状态已改为「${status}」`, 'success');
+          await this.loadQuotations();
+          await this.maybeOfferApply(r);
+        } catch (e) {
+          CRM.toast(e.message || '改状态失败', 'error');
+        }
+      },
+
+      /** 落标抽屉保存 */
+      async saveLose() {
+        const row = this.loseTarget;
+        if (!row) return;
+        this.loseSaving = true;
+        try {
+          const r = await CRM.api.setQuotationStatus(row.id, Object.assign({ status: '已落标' }, this.loseForm));
+          this.loseOpen = false;
+          CRM.toast('已标记为落标', 'success');
+          await this.loadQuotations();
+          await this.maybeOfferApply(r);
+        } catch (e) {
+          CRM.toast(e.message || '标记落标失败', 'error');
+        } finally {
+          this.loseSaving = false;
+        }
+      },
+
+      /**
+       * 中标后询问是否回填项目。
+       * 独立成方法：正常改状态与落标抽屉两条路径都会走到这里。
+       */
+      async maybeOfferApply(r) {
+        if (!r || !r.can_apply || !r.project) return;
+        const yes = await CRM.confirm({
+          title: '是否回填项目合同额？',
+          message: `报价单已标记为「已中标」。<br><br>`
+            + `项目「${r.project.name}」将更新为：<br>`
+            + `合同额：${CRM.util.fmtMoney(r.project.contract_amount)} → <strong>${CRM.util.fmtMoney(r.quote_total)}</strong> 元<br>`
+            + `阶段：${r.project.stage || '（空）'} → <strong>已中标/已签约</strong><br>`
+            + `投标结果：${r.project.bid_result || '（空）'} → <strong>已中标</strong>`,
+          okText: '回填项目',
+          cancelText: '暂不'
+        });
+        if (!yes) return;
+        try {
+          const a = await CRM.api.applyQuotationToProject(r.id);
+          CRM.toast(a.applied ? `已回填 ${a.changes.length} 项到项目` : (a.message || '无需修改'), 'success');
+          await this.load();
+        } catch (e) {
+          CRM.toast(e.message || '回填失败', 'error');
+        }
+      },
+
+      /** 导出 Excel 报价单（浏览器端 SheetJS 生成，后端只给数据） */
+      async exportQuotation(row) {
+        try {
+          const data = await CRM.api.quotationExportData(row.id);
+          CRM.quotation.buildWorkbook(data);
+          CRM.toast('报价单已导出', 'success');
+        } catch (e) {
+          CRM.toast(e.message || '导出失败', 'error');
         }
       },
 
@@ -301,6 +465,71 @@ window.CRM = window.CRM || {};
             </div>
           </div>
 
+          <!-- ============ 报价单 ============ -->
+          <div v-show="tab === 'quotations'" class="card">
+            <div class="card-head">
+              <div>
+                <div class="card-title">报价单</div>
+                <div class="card-sub">
+                  同一项目可有多张报价单，改价用「复制为新版本」保留历史；金额由系统计算
+                </div>
+              </div>
+              <button class="btn btn-primary" @click="openQuotation">+ 新建报价单</button>
+            </div>
+
+            <div v-if="quotationsLoading" class="muted" style="padding:16px">加载中…</div>
+            <c-empty v-else-if="!quotations.length" icon="file"
+                     title="还没有报价单"
+                     desc="点右上角「新建报价单」开始；改价时用「复制为新版本」，历史版本会保留下来" />
+            <div v-else class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>报价单号</th>
+                    <th style="width:64px">版本</th>
+                    <th style="width:110px">报价日期</th>
+                    <th style="width:96px">状态</th>
+                    <th style="width:60px">行数</th>
+                    <th style="width:130px">合计</th>
+                    <th style="width:110px">有效期至</th>
+                    <th style="width:230px">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="q in quotations" :key="q.id">
+                    <td class="mono">{{ q.quote_no }}</td>
+                    <td>V{{ q.version }}</td>
+                    <td>{{ q.quote_date || '—' }}</td>
+                    <td>
+                      <select class="input input-sm" :value="q.status"
+                              @change="changeStatus(q, $event.target.value)">
+                        <option v-for="s in ['草稿','已报出','已中标','已落标','已过期']" :key="s" :value="s">{{ s }}</option>
+                      </select>
+                    </td>
+                    <td>{{ q.item_count }}</td>
+                    <td class="num">{{ fmtMoney(q.total_amount) }}</td>
+                    <td>{{ q.valid_until || '—' }}</td>
+                    <td>
+                      <div style="display:flex;gap:4px;justify-content:flex-end">
+                        <button class="btn btn-sm" @click="editQuotation(q)">编辑</button>
+                        <button class="btn btn-sm" @click="copyQuotation(q)">新版本</button>
+                        <button class="btn btn-sm" @click="exportQuotation(q)">导出</button>
+                        <button class="btn btn-sm btn-danger" @click="removeQuotation(q)">删除</button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div v-if="quotations.some(q => q.status === '已落标')" class="note mt-3">
+              <c-icon name="alert" :size="14" />
+              <div style="font-size:var(--fs-xs)">
+                落标时登记的竞争对手与原因会被保存下来，便于以后复盘「谁在抢单、为什么丢单」。
+              </div>
+            </div>
+          </div>
+
           <!-- 回款计划 -->
           <div v-show="tab === 'plans'" class="card">
             <div class="card-head">
@@ -498,6 +727,46 @@ window.CRM = window.CRM || {};
                           :plans="project ? project.plans : []"
                           :payment="editingPayment"
                           @saved="onPaymentSaved" />
+
+        <!-- 报价单抽屉 -->
+        <c-quotation-drawer v-model="quotationOpen"
+                            :project-id="id"
+                            :project-name="project ? project.name : ''"
+                            :customer-name="project && project.customer ? (project.customer.short_name || project.customer.name) : ''"
+                            :quotation="editingQuotation"
+                            @saved="onQuotationSaved" />
+
+        <!-- 落标登记抽屉：收集竞争对手与落标原因（后续复盘"谁在抢单"的数据来源） -->
+        <c-drawer v-model="loseOpen" title="登记落标信息"
+                  sub="记下来便于以后复盘：为什么丢单、对手什么价" width="560px">
+          <div class="form-grid">
+            <div class="field">
+              <label class="field-label">竞争对手</label>
+              <input class="input" v-model="loseForm.competitor" placeholder="例如：某某阀门厂" />
+            </div>
+            <div class="field">
+              <label class="field-label">对手报价（元）</label>
+              <input class="input" type="number" min="0" step="any" v-model="loseForm.competitor_price" placeholder="可留空" />
+            </div>
+            <div class="field" style="grid-column: span 2">
+              <label class="field-label">落标原因</label>
+              <input class="input" v-model="loseForm.lose_reason" placeholder="例如：价格高 8% / 交期不满足 / 品牌指定" />
+            </div>
+          </div>
+          <div class="note mt-3">
+            <c-icon name="alert" :size="14" />
+            <div style="font-size:var(--fs-xs)">
+              报价单「{{ loseTarget ? loseTarget.quote_no : '' }}」将标记为<strong>已落标</strong>。
+              这些信息只存在你自己的电脑上。
+            </div>
+          </div>
+          <template #footer>
+            <button class="btn" @click="loseOpen = false">取消</button>
+            <button class="btn btn-primary" :disabled="loseSaving" @click="saveLose">
+              {{ loseSaving ? '保存中…' : '保存并标记落标' }}
+            </button>
+          </template>
+        </c-drawer>
       </div>`
   };
 

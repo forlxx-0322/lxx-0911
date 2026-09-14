@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 阶段二 API 验收测试 —— 客户管理模块
  * 用法：node tools/test-phase2-api.js
  * 前置：服务已在 127.0.0.1:8899 运行
@@ -79,8 +79,8 @@ async function resetTestDictItem() {
   /* ---------- 1. 字典接口 ---------- */
   const dict = await api('GET', '/api/dict');
   const cats = dict.data ? dict.data.categories : [];
-  check(1, '字典接口返回 22 类选项',
-    dict.status === 200 && cats.length === 22,
+  check(1, '字典接口返回 23 类选项',
+    dict.status === 200 && cats.length === 23,
     `返回 ${cats.length} 类，选项文本数组可直接用于下拉框`);
   check(2, '阀门行业选项内容正确',
     dict.data && dict.data.options.industry.includes('石油') && dict.data.options.industry.includes('空分')

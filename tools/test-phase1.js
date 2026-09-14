@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 阶段一验收测试脚本
  * 用法：node tools/test-phase1.js
  * 前置：服务已在 127.0.0.1:8899 运行
@@ -18,7 +18,8 @@ const EXPECTED_TABLES = [
   'customers', 'contacts', 'tags', 'customer_tags', 'followups', 'projects',
   'payments', 'tasks', 'attachments', 'activity_logs', 'dict', 'settings', 'region'
 ];
-const DICT_CATEGORIES = 22;
+/* 1.11 起新增 quotation_status 一类，故为 23 */
+const DICT_CATEGORIES = 23;
 
 const results = [];
 function check(no, name, pass, detail) {
@@ -76,7 +77,7 @@ async function get(pathname, init) {
     const dictStat = db.prepare(
       'SELECT COUNT(DISTINCT category) AS c, COUNT(*) AS n FROM dict WHERE deleted_at IS NULL'
     ).get();
-    check(4, '字典数据已灌入（22 类）',
+    check(4, '字典数据已灌入（23 类）',
       dictStat.c === DICT_CATEGORIES,
       `${dictStat.c} 类 / ${dictStat.n} 项${dictStat.c !== DICT_CATEGORIES ? '（预期 ' + DICT_CATEGORIES + ' 类）' : ''}`);
 

@@ -143,6 +143,7 @@ window.CRM = window.CRM || {};
           <span>全局搜索</span>
           <span class="kbd" style="margin-left:auto">Ctrl K</span>
         </div>
+        <c-reminder-bell />
         <button class="icon-btn theme-toggle" type="button"
                 :title="theme.mode === 'dark' ? '切换到浅色主题' : '切换到深色主题'"
                 :aria-label="theme.mode === 'dark' ? '切换到浅色主题' : '切换到深色主题'"

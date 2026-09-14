@@ -141,7 +141,30 @@ window.CRM = window.CRM || {};
   const PrefsPanel = {
     name: 'PrefsPanel',
     data() {
-      return { loading: true, settings: {}, meta: {}, saving: false, dirty: false };
+      return {
+        loading: true, settings: {}, meta: {}, saving: false, dirty: false,
+        /* 邮件提醒（独立于普通设置：授权码单独处理，且状态需要单独查询） */
+        email: { loading: true, providers: [], smtp_pass_configured: false },
+        emailDirty: false,
+        status: null,
+        testing: false,
+        sending: false
+      };
+    },
+    computed: {
+      /** 各服务商的授权码获取指引（避免用户把登录密码填进来） */
+      providerHint() {
+        const p = this.email.smtp_provider;
+        const hints = {
+          qq: 'QQ 邮箱：设置 → 账户 → 开启 SMTP 服务 → 生成授权码',
+          163: '163 邮箱：设置 → POP3/SMTP/IMAP → 开启服务 → 新增授权码',
+          126: '126 邮箱：设置 → POP3/SMTP/IMAP → 开启服务 → 新增授权码',
+          exmail: '腾讯企业邮：邮箱设置 → 收发信设置 → 客户端专用密码',
+          '189': '天翼 189 邮箱：设置 → 客户端设置 → 生成授权码',
+          custom: '请填写该邮箱服务商提供的 SMTP 授权码'
+        };
+        return hints[p] || '请填写邮箱服务商提供的授权码（不是登录密码）';
+      }
     },
     setup() {
       return { theme: CRM.theme.state };
@@ -166,6 +189,96 @@ window.CRM = window.CRM || {};
         }
       },
       markDirty() { this.dirty = true; },
+
+      /* ---------------- 邮件提醒 ---------------- */
+      async loadEmail() {
+        this.email.loading = true;
+        try {
+          const d = await CRM.api.remindSettings();
+          this.email = Object.assign({ loading: false, providers: [] }, d);
+          this.emailDirty = false;
+          await this.loadEmailStatus();
+        } catch (e) {
+          this.email.loading = false;
+          CRM.toast(e.message || '加载邮件提醒设置失败', 'error');
+        }
+      },
+      async loadEmailStatus() {
+        try { this.status = await CRM.api.emailStatus(); } catch (_) { this.status = null; }
+      },
+      markEmailDirty() { this.emailDirty = true; },
+      /** 换服务商时自动带出服务器与端口（用户可再手改） */
+      onProviderChange() {
+        const p = (this.email.providers || []).find((x) => x.key === this.email.smtp_provider);
+        if (p && p.host) {
+          this.email.smtp_host = p.host;
+          this.email.smtp_port = String(p.port);
+        }
+        this.markEmailDirty();
+      },
+      async saveEmail() {
+        const patch = {
+          follow_remind_days: this.email.follow_remind_days,
+          follow_remind_time: this.email.follow_remind_time,
+          follow_remind_quiet: this.email.follow_remind_quiet,
+          follow_remind_on_start: this.email.follow_remind_on_start,
+          remind_email_on: this.email.remind_email_on,
+          remind_email_time: this.email.remind_email_time,
+          remind_email_to: this.email.remind_email_to,
+          smtp_provider: this.email.smtp_provider,
+          smtp_host: this.email.smtp_host,
+          smtp_port: this.email.smtp_port,
+          smtp_user: this.email.smtp_user
+        };
+        /* 授权码留空表示不修改；填了才提交 */
+        if (this.email.smtp_pass) patch.smtp_pass = this.email.smtp_pass;
+        try {
+          const r = await CRM.api.saveRemindSettings(patch);
+          this.email = Object.assign(this.email, r.settings, { loading: false });
+          this.email.smtp_pass = '';
+          this.emailDirty = false;
+          await this.loadEmailStatus();
+          CRM.toast('邮件提醒设置已保存', 'success');
+          return true;
+        } catch (e) {
+          CRM.toast(e.message || '保存失败', 'error');
+          return false;
+        }
+      },
+      async doTestEmail() {
+        if (this.emailDirty) {
+          const ok = await this.saveEmail();
+          if (!ok) return;
+        }
+        this.testing = true;
+        try {
+          const r = await CRM.api.testEmail();
+          CRM.toast(r.message || '测试邮件已发送', 'success', 6000);
+          await this.loadEmailStatus();
+        } catch (e) {
+          CRM.toast(e.message || '测试发送失败', 'error', 8000);
+          await this.loadEmailStatus();
+        } finally {
+          this.testing = false;
+        }
+      },
+      async doSendNow() {
+        if (this.emailDirty) {
+          const ok = await this.saveEmail();
+          if (!ok) return;
+        }
+        this.sending = true;
+        try {
+          const r = await CRM.api.sendReminderNow();
+          CRM.toast(r.message || `已发送 ${r.count} 位客户的提醒`, 'success', 6000);
+          await this.loadEmailStatus();
+        } catch (e) {
+          CRM.toast(e.message || '发送失败', 'error', 8000);
+          await this.loadEmailStatus();
+        } finally {
+          this.sending = false;
+        }
+      },
       async save() {
         this.saving = true;
         try {
@@ -189,7 +302,7 @@ window.CRM = window.CRM || {};
         }
       }
     },
-    async created() { this.load(); },
+    async created() { this.load(); this.loadEmail(); },
     template: `
       <div>
         <div v-if="loading" class="card"><div class="card-body muted">加载中…</div></div>
@@ -226,6 +339,111 @@ window.CRM = window.CRM || {};
                 </select>
               </div>
             </div>
+          </c-card>
+
+          <!-- ============ 邮件提醒（默认关闭；关闭时不产生任何网络请求） ============ -->
+          <c-card class="mt-4" title="邮件提醒" sub="即使软件没开，也能在手机上收到当天要跟进谁" icon="mail">
+            <div v-if="email.loading" class="muted">加载中…</div>
+            <template v-else>
+              <div class="note" style="margin-bottom:14px">
+                <c-icon name="alert" :size="16" />
+                <div style="font-size:var(--fs-sm)">
+                  这是本软件**第二个会联网的功能**（第一个是招标采集）。
+                  <strong>关闭时不产生任何外部网络请求</strong>，软件内提醒照常工作。<br>
+                  邮件只会发给你自己填的地址，不会发给客户。
+                </div>
+              </div>
+
+              <div class="form-grid">
+                <div class="field">
+                  <label class="field-label">启用邮件提醒</label>
+                  <div class="switch" @click="email.remind_email_on = email.remind_email_on === '1' ? '0' : '1'; markEmailDirty()">
+                    <input type="checkbox" :checked="email.remind_email_on === '1'" readonly />
+                    <span class="switch-track"><span class="switch-thumb"></span></span>
+                    <span class="switch-text">{{ email.remind_email_on === '1' ? '已开启' : '已关闭' }}</span>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label">每天发送时间</label>
+                  <input class="input" type="time" v-model="email.remind_email_time" @input="markEmailDirty" />
+                  <div class="field-hint">当天没有待跟进客户时不会发送空邮件</div>
+                </div>
+
+                <div class="field">
+                  <label class="field-label">邮箱服务商</label>
+                  <select class="input" v-model="email.smtp_provider" @change="onProviderChange">
+                    <option v-for="p in (email.providers || [])" :key="p.key" :value="p.key">{{ p.label }}</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label class="field-label">SMTP 服务器</label>
+                  <input class="input" v-model="email.smtp_host" @input="markEmailDirty" placeholder="smtp.qq.com" />
+                </div>
+                <div class="field">
+                  <label class="field-label">端口</label>
+                  <input class="input" v-model="email.smtp_port" @input="markEmailDirty" placeholder="465" />
+                  <div class="field-hint">使用 465（隐式 TLS）</div>
+                </div>
+                <div class="field">
+                  <label class="field-label">邮箱账号</label>
+                  <input class="input" v-model="email.smtp_user" @input="markEmailDirty" placeholder="you@qq.com" />
+                </div>
+                <div class="field">
+                  <label class="field-label">
+                    邮箱授权码
+                    <span v-if="email.smtp_pass_configured" class="tag" style="margin-left:6px">已配置</span>
+                  </label>
+                  <input class="input" type="password" v-model="email.smtp_pass" @input="markEmailDirty"
+                         :placeholder="email.smtp_pass_configured ? '已保存，留空表示不修改' : '不是登录密码，是邮箱设置里生成的授权码'" />
+                  <div class="field-hint">
+                    {{ providerHint }}
+                    <button class="link-btn" style="margin-left:6px" @click="email.smtp_pass = '__CLEAR__'; markEmailDirty()">清空</button>
+                  </div>
+                </div>
+                <div class="field">
+                  <label class="field-label">收件地址</label>
+                  <input class="input" v-model="email.remind_email_to" @input="markEmailDirty"
+                         placeholder="留空则发给上面的账号自己" />
+                </div>
+              </div>
+
+              <!-- 通道状态 -->
+              <div v-if="status" class="note mt-4" :class="status.lastOk === false ? 'warn' : ''">
+                <c-icon :name="status.lastOk === false ? 'alert' : 'check'" :size="16" />
+                <div style="font-size:var(--fs-sm)">
+                  <div>
+                    配置{{ status.configured ? '完整' : '不完整' }}
+                    <span v-if="!status.configured">：还缺 {{ (status.missing || []).join('、') }}</span>
+                  </div>
+                  <div v-if="status.lastAt" class="mt-3">
+                    上次尝试：{{ status.lastAt }} · {{ status.lastOk ? '成功' : '失败' }}
+                    <span v-if="status.lastMsg">（{{ status.lastMsg }}）</span>
+                  </div>
+                  <div v-else class="mt-3 muted">尚未发送过</div>
+                  <div v-if="status.failStreak" class="mt-3" style="color:var(--c-warning)">
+                    连续失败 {{ status.failStreak }} 次，达到 {{ status.failStreakLimit }} 次会自动关闭邮件提醒
+                  </div>
+                </div>
+              </div>
+
+              <div class="mt-4" style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn" :disabled="testing" @click="doTestEmail">
+                  {{ testing ? '发送中…' : '测试发送' }}
+                </button>
+                <button class="btn" :disabled="sending" @click="doSendNow">
+                  {{ sending ? '发送中…' : '立即发送当日提醒' }}
+                </button>
+                <span class="muted" style="font-size:var(--fs-xs);align-self:center">
+                  改完配置请先保存，再点测试发送
+                </span>
+              </div>
+
+              <div class="mt-3" style="display:flex;gap:8px;align-items:center">
+                <button class="btn btn-primary" :disabled="!emailDirty" @click="saveEmail">保存邮件提醒设置</button>
+                <button class="btn" :disabled="!emailDirty" @click="loadEmail">放弃修改</button>
+                <span v-if="emailDirty" class="muted" style="font-size:var(--fs-xs)">有未保存的修改</span>
+              </div>
+            </template>
           </c-card>
 
           <c-card class="mt-4" title="基本资料与界面" sub="软件名称与公司名会显示在界面标题与导出文件中" icon="settings">

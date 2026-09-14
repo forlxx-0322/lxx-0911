@@ -23,6 +23,8 @@ const systemRoutes = require('./routes/system');
 const attachmentRoutes = require('./routes/attachment');
 const mapRoutes = require('./routes/map');
 const collectRoutes = require('./routes/collect');
+const remindersRoutes = require('./routes/reminders');
+const quotationRoutes = require('./routes/quotation');
 const backupService = require('./services/backup');
 
 /* ------------------------------------------------------------------ */
@@ -450,7 +452,7 @@ function buildRouter(ctx) {
       };
 
       /* 依次尝试各模块路由，返回 null 表示未命中 */
-      const handlers = [crmRoutes, pmRoutes, systemRoutes, attachmentRoutes, mapRoutes, collectRoutes];
+      const handlers = [crmRoutes, pmRoutes, systemRoutes, attachmentRoutes, mapRoutes, collectRoutes, remindersRoutes, quotationRoutes];
       for (const handler of handlers) {
         const handled = await handler(routeCtx);
 
@@ -600,6 +602,36 @@ async function main() {
       })
       .catch((e) => console.error('[采集] 启动采集失败（不影响使用）：', e.message));
   }, 8000);
+
+  /* ------------------------------------------------------------------ */
+  /* 邮件提醒调度                                                        */
+  /*                                                                     */
+  /* 与招标采集同一套护栏：**未启用时不建立任何网络连接**。               */
+  /* 启用后每 5 分钟检查一次：到了设定时间且当天没发过，就发一次当日提醒； */
+  /* 当天没有待跟进客户时不会发空邮件。                                   */
+  /* ------------------------------------------------------------------ */
+  setTimeout(() => {
+    const tick = () => {
+      if (!ctx.db) return;                     // 期间可能已停机或正在恢复数据
+      try {
+        const s = getSettings(ctx.db);
+        require('./notify').tick(ctx.db, s).then((r) => {
+          if (r && r.data && r.data.sent) {
+            console.log(`[提醒] 已发送当日跟进提醒：${r.data.count} 位客户 → ${r.data.to}`);
+          } else if (r && r.message) {
+            console.log(`[提醒] ${r.message}`);
+          }
+        }).catch((e) => console.error('[提醒] 发送失败（不影响使用）：', e.message));
+      } catch (e) {
+        /* 默认关闭时这里什么也不做；表/设置缺失也静默跳过 */
+      }
+    };
+    /* 启动后先等 20 秒（避开启动高峰），之后每 5 分钟一次 */
+    setTimeout(() => {
+      tick();
+      setInterval(tick, 5 * 60 * 1000).unref();
+    }, 20000);
+  }, 1000);
 
   /* 每日自动备份：当天没备份过就备一次（不阻塞启动） */
   const settings = getSettings(ctx.db);

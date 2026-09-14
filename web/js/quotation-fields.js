@@ -49,6 +49,7 @@ window.CRM = window.CRM || {};
     list: [],        // 自定义列（含停用）
     columns: [],     // 全部列，按全局列顺序
     order: [],       // 列顺序（key 数组）
+    locked: [],      // 结构必需、不允许删除的内置列 key
     kinds: ['text', 'number', 'select'],
     limits: { maxFields: 60, nameMax: 20 }
   });
@@ -72,13 +73,17 @@ window.CRM = window.CRM || {};
 
   /**
    * 某张表要显示的列（按全局列顺序）。
+   *
+   * 被删掉（停用/隐藏）的列在表格里不显示，但**列管理里仍然列出来**，
+   * 方便随时恢复 —— 值一直留在库里。
+   *
    * @param {string} [scope] 'quotation' | 'template' | 空（空 = 全部列，列管理用）
    */
   function columnsFor(scope) {
     return state.columns.filter((c) => {
-      if (c.type === 'custom') return !!c.enabled || !scope;   // 停用的列：表格不显示，列管理里仍列出
+      if (!c.enabled) return !scope;                       // 表格不显示，列管理仍显示
       if (!scope) return true;
-      return !QUOTATION_ONLY[c.key] || scope === 'quotation';
+      return !(c.type === 'builtin' && QUOTATION_ONLY[c.key] && scope !== 'quotation');
     });
   }
 
@@ -100,6 +105,7 @@ window.CRM = window.CRM || {};
         : c));
       state.kinds = r.kinds || state.kinds;
       state.limits = r.limits || state.limits;
+      state.locked = r.locked || [];
       state.loaded = true;
       return state.list;
     } finally {
@@ -146,7 +152,14 @@ window.CRM = window.CRM || {};
         return this.presets.filter((p) => !have.has(p.name));
       },
       enabledCount() { return this.st.list.filter((f) => f.enabled).length; },
-      tableColumns() { return columnsFor('quotation').length; }
+      tableColumns() { return columnsFor('quotation').length; },
+      /* 必需列的中文名（提示语里用） */
+      lockedLabels() {
+        return (this.st.locked || []).map((k) => {
+          const c = this.st.columns.find((x) => x.key === k);
+          return (c && c.label) || k;
+        }).join('、');
+      }
     },
     methods: {
       close() { close(); },
@@ -214,8 +227,38 @@ window.CRM = window.CRM || {};
         }
       },
 
+      /** 内置列改名（清空 = 恢复默认名） */
+      async renameBuiltin(col) {
+        try {
+          const r = await CRM.api.renameQuotationColumn(col.key, col.label);
+          await this.refresh();
+          CRM.toast(r.renamed ? `列名已改为「${r.label}」` : `已恢复默认列名「${r.default_label}」`, 'success');
+        } catch (e) {
+          CRM.toast(e.message || '改名失败', 'error');
+          await this.refresh();
+        }
+      },
+
+      /** 内置列的「删除 / 恢复」（删除只是不显示，值仍保留） */
+      async toggleVisible(col, force) {
+        const want = force === undefined ? !col.enabled : !!force;
+        if (!want && col.locked) { CRM.toast(col.lock_reason || '这一列不能删除', 'error', 5000); return; }
+        try {
+          await CRM.api.setQuotationColumnVisible(col.key, want);
+          await this.refresh();
+          CRM.toast(want
+            ? `已恢复列「${col.label}」（之前填过的值还在）`
+            : `已删除列「${col.label}」—— 值仍保留在单据里，可随时恢复`, 'success', 4000);
+        } catch (e) {
+          CRM.toast(e.message || '操作失败', 'error', 6000);
+          await this.refresh();
+        }
+      },
+
+      isLocked(col) { return col.type === 'builtin' && !!col.locked; },
+
       async toggle(col) {
-        if (!col.row) return;
+        if (col.type === 'builtin') return this.toggleVisible(col);
         col.row.enabled = col.row.enabled ? 0 : 1;
         await this.saveRow(col);
       },
@@ -231,6 +274,7 @@ window.CRM = window.CRM || {};
 
       isQuotationOnly(col) { return !!QUOTATION_ONLY[col.key]; },
 
+      /** 删除自定义列（真删，进软删除；历史值仍留在单据的 extra 里） */
       async remove(col) {
         const row = col.row;
         if (!row) return;
@@ -266,11 +310,15 @@ window.CRM = window.CRM || {};
           <div style="font-size:var(--fs-xs)">
             报价时按客户要求填的规格项都可以加成列；
             <strong>改列名不会丢数据</strong>（历史报价单里的值跟着新列名显示），
-            <strong>删列也不会删值</strong>（只是不再显示）。<br>
-            <strong>列顺序是全局的</strong>：在这里（或直接在表头上点 ◀ ▶）排好，
+            <strong>删列也不会删值</strong>（只是不再显示，随时能恢复）。<br>
+            <strong>内置列同样可以改名、可以删</strong>：列名直接在这里改
+            （清空 = 恢复默认名），不想要的点「启用」变「已删除」或右侧 ✕；
+            只有 <strong>{{ lockedLabels }}</strong>
+            这四列不能删（要算金额、要认出报的是什么），但同样可以改名和移动。<br>
+            <strong>列顺序也是全局的</strong>：在这里 ↑↓ 或直接在表头上点 ◀ ▶，
             报价单明细、报价模板明细、导出的 Excel 单据三处一致。
             当前启用 <strong>{{ enabledCount }}</strong> 个自定义列，
-            报价单表格共 <strong>{{ tableColumns }}</strong> 列（含内置列），自定义列最多 {{ st.limits.maxFields }} 个。
+            报价单表格共 <strong>{{ tableColumns }}</strong> 列。
           </div>
         </div>
 
@@ -336,9 +384,13 @@ window.CRM = window.CRM || {};
                 </td>
                 <td>
                   <template v-if="c.type === 'builtin'">
-                    <span class="qf-builtin">{{ c.label }}</span>
-                    <span class="tag muted qf-tag">内置</span>
-                    <span v-if="isQuotationOnly(c)" class="tag muted qf-tag">仅报价单</span>
+                    <input class="input input-sm" v-model="c.label" :title="'默认列名：' + c.default_label"
+                           @change="renameBuiltin(c)" />
+                    <div class="qf-tags">
+                      <span class="tag muted qf-tag">内置</span>
+                      <span v-if="isQuotationOnly(c)" class="tag muted qf-tag">仅报价单</span>
+                      <span v-if="c.locked" class="tag warn qf-tag" :title="c.lock_reason">必需</span>
+                    </div>
                   </template>
                   <input v-else class="input input-sm" v-model="c.row.name" @change="saveRow(c)" />
                 </td>
@@ -362,14 +414,18 @@ window.CRM = window.CRM || {};
                   <span v-else class="muted" style="font-size:var(--fs-xs)">—</span>
                 </td>
                 <td>
-                  <span v-if="c.type === 'custom'" class="tag" :class="c.enabled ? 'success' : 'muted'"
-                        style="cursor:pointer" @click="toggle(c)">{{ c.enabled ? '启用' : '停用' }}</span>
-                  <span v-else class="tag muted">固定</span>
+                  <span v-if="isLocked(c)" class="tag muted" :title="c.lock_reason">必需</span>
+                  <span v-else class="tag" :class="c.enabled ? 'success' : 'muted'"
+                        style="cursor:pointer" :title="c.enabled ? '点一下即从表格里删掉（值保留）' : '点一下恢复显示'"
+                        @click="toggle(c)">{{ c.enabled ? '启用' : '已删除' }}</span>
                 </td>
                 <td>
                   <button v-if="c.type === 'custom'" class="icon-btn danger" title="删除这一列"
                           @click="remove(c)">✕</button>
-                  <span v-else class="muted" style="font-size:var(--fs-xs)">—</span>
+                  <button v-else-if="!c.locked" class="icon-btn danger"
+                          title="删除这一列（不再显示，已填的值保留，可随时恢复）"
+                          @click="toggleVisible(c, false)">✕</button>
+                  <span v-else class="muted" style="font-size:var(--fs-xs)" :title="c.lock_reason">—</span>
                 </td>
               </tr>
             </tbody>

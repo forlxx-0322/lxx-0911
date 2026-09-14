@@ -176,6 +176,11 @@ window.CRM = window.CRM || {};
     moveQuotationField: (id, dir) => request('POST', `/api/quotation-fields/${id}/move`, { dir }),
     /* 移动任意列（内置列也算），key 形如 'remark' 或 'f:12' */
     moveQuotationColumn: (key, dir) => request('POST', '/api/quotation-fields/move', { key, dir }),
+    /* 内置列改名（label 传空 = 恢复默认名） */
+    renameQuotationColumn: (key, label) => request('POST', '/api/quotation-fields/rename', { key, label }),
+    /* 内置列删除（隐藏）/ 恢复 */
+    setQuotationColumnVisible: (key, visible) =>
+      request('POST', '/api/quotation-fields/visibility', { key, visible }),
     quotationColumnOrder: () => request('GET', '/api/quotation-fields/order'),
     saveQuotationColumnOrder: (order) => request('POST', '/api/quotation-fields/order', { order }),
 

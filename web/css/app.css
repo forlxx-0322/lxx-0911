@@ -2156,6 +2156,9 @@ body {
 /* 现有列列表：输入框贴着单元格，看起来像可直接改 */
 .qf-table td { vertical-align: middle; }
 .qf-table .input-sm { width: 100%; }
-/* 内置列在列管理里的样子：名字 + 标签，不可改名/删除，但可以移动 */
+/* 内置列在列管理里的样子：列名可直接改，下面挂「内置/仅报价单/必需」标签 */
 .qf-builtin { font-weight: 600; }
 .qf-tag { margin-left: 6px; font-size: var(--fs-xxs, 11px); }
+.qf-tags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+.qf-tags .qf-tag { margin-left: 0; }
+.tag.warn { background: var(--c-warn-soft, #fff7ed); color: var(--c-warn, #ea580c); }

@@ -111,6 +111,16 @@ const USER_COLUMNS = [
   let cdp = null, child = null, profile = null;
   /* 套件开跑时的列顺序（本套件会加很多临时列，跑完要把顺序也还原干净） */
   const orderAtStart = (await api('GET', '/api/quotation-fields/order')).data.order;
+  /* 内置列在界面上的**真实列名**：使用者可以改名（如「数量」→「台数」），
+     所以测试里不能写死列名，一律从接口取 */
+  const colsAtStart = (await api('GET', '/api/quotation-fields')).data.columns || [];
+  const labelOf = (key) => {
+    const c = colsAtStart.find((x) => x.key === key);
+    return (c && c.label) || key;
+  };
+  const NAME_LABEL = labelOf('item_name');
+  const QTY_LABEL = labelOf('quantity');
+  const PRICE_LABEL = labelOf('unit_price');
 
   const dropFields = () => {
     try {
@@ -627,13 +637,19 @@ const USER_COLUMNS = [
         const tr = d.querySelector('.quo-table tbody tr');
         const tds = [...tr.querySelectorAll('td')];
         if (tds.length !== heads.length) return { err: '表头与单元格数量对不上', heads: heads.length, tds: tds.length };
-        const setVal = (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
-        setVal(tr.querySelectorAll('input')[0], '界面录入球阀');
+        /* 按**列名**取单元格：列顺序与列名都是使用者可改的，不能按位置取 */
+        const cellInput = (label) => {
+          const i = heads.indexOf(label);
+          return i >= 0 && tds[i] ? tds[i].querySelector('input') : null;
+        };
+        const setVal = (el, v) => { if (el) { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); } };
+        if (!cellInput(${JSON.stringify(NAME_LABEL)})) return { err: '找不到「' + ${JSON.stringify(NAME_LABEL)} + '」列' };
+        setVal(cellInput(${JSON.stringify(NAME_LABEL)}), '界面录入球阀');
         const cell = tds[colIdx].querySelector('input');
         if (!cell) return { err: '这一列没有输入框', colIdx };
         setVal(cell, '界面填的值');
-        setVal(tds[heads.indexOf('数量')].querySelector('input'), '3');
-        setVal(tds[heads.indexOf('单价(元)')].querySelector('input'), '1500');
+        setVal(cellInput(${JSON.stringify(QTY_LABEL)}), '3');
+        setVal(cellInput(${JSON.stringify(PRICE_LABEL)}), '1500');
         await new Promise(r => setTimeout(r, 400));
 
         const save = [...d.querySelectorAll('.drawer-foot button')].find(x => x.textContent.includes('保存报价单'));
@@ -680,12 +696,14 @@ const USER_COLUMNS = [
         await new Promise(r => setTimeout(r, 2400));
         const d = [...document.querySelectorAll('.drawer')].pop();
         if (!d) return { err: '编辑抽屉未打开' };
-        const heads = [...d.querySelectorAll('.quo-table thead th')].map(x => x.textContent.trim());
+        const heads = [...d.querySelectorAll('.quo-table thead th')]
+          .map(x => x.textContent.replace(/[◀▶]/g, '').trim());
         const colIdx = heads.findIndex(h => h.includes(${JSON.stringify(UI_COL)}));
         if (colIdx < 0) return { err: '编辑抽屉里没有自定义列', heads: heads.join('|') };
         const tr = d.querySelector('.quo-table tbody tr');
         const cell = tr.querySelectorAll('td')[colIdx].querySelector('input');
-        const name = tr.querySelectorAll('input')[0].value;
+        const nameIdx = heads.indexOf(${JSON.stringify(NAME_LABEL)});
+        const name = nameIdx >= 0 ? tr.querySelectorAll('td')[nameIdx].querySelector('input').value : '(无名称列)';
         return { colIdx, value: cell ? cell.value : '(无)', name };
       })()`);
       check('浏览器：重新打开这张报价单，自定义列的值正确回显',

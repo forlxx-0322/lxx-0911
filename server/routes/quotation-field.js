@@ -53,6 +53,30 @@ module.exports = async function quotationFieldRoutes(ctx) {
     }
   }
 
+  /* 改内置列的显示名：{ key: 'pressure_rating', label: '设计压力' }（label 传空 = 恢复默认名） */
+  if (sub === 'rename' && method === 'POST') {
+    const key = String((body && body.key) || '');
+    if (!key) return fail(400, 'KEY_REQUIRED', '请指定要改名的列');
+    try {
+      return ok(fieldsvc.renameBuiltin(db, key, (body || {}).label));
+    } catch (e) {
+      return fail(e.status || 400, e.code || 'RENAME_FAILED', e.message);
+    }
+  }
+
+  /* 删除（隐藏）/ 恢复一个内置列：{ key: 'remark', visible: false } */
+  if (sub === 'visibility' && method === 'POST') {
+    const key = String((body && body.key) || '');
+    if (!key) return fail(400, 'KEY_REQUIRED', '请指定要处理的列');
+    const raw = (body || {}).visible;
+    const visible = !(raw === false || raw === 0 || raw === '0' || raw === 'false');
+    try {
+      return ok(fieldsvc.setBuiltinVisible(db, key, visible));
+    } catch (e) {
+      return fail(e.status || 400, e.code || 'VISIBILITY_FAILED', e.message);
+    }
+  }
+
   /* 新增 */
   if (!sub && method === 'POST') {
     try {

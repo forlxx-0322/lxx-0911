@@ -58,6 +58,38 @@ const CUSTOM_ANCHOR = 'connection_type';
 /** 列序存放的设置项 key（存的是 JSON 数组，元素为内置列 key 或 `f:<列id>`） */
 const ORDER_SETTING = 'quotation_column_order';
 
+/**
+ * 内置列的显示名可以改（例：把「口径」改成「公称通径」），存在设置项里
+ * `quotation_column_labels` = { 列key: 自定义名 }。留空 = 用默认名。
+ */
+const LABEL_SETTING = 'quotation_column_labels';
+
+/**
+ * 被删掉（隐藏）的内置列，存在设置项 `quotation_column_hidden` = [列key, ...]。
+ *
+ * 为什么是"隐藏"而不是真删：内置列对应明细表里实实在在的字段，
+ * 删掉只是不再显示，已经填过的值仍然留在库里 —— 加回来就能看到。
+ */
+const HIDDEN_SETTING = 'quotation_column_hidden';
+
+/**
+ * 结构必需的列：**可以改名、可以移动，但不允许删除**。
+ *
+ * 理由很实在：
+ *   - 名称/阀种 —— 删了这一行报的是什么就认不出来了
+ *   - 数量、单价 —— 金额 = 数量 × 单价，删了这张单就没有金额
+ *   - 小计     —— 合计是各行的这一列相加出来的
+ * 界面会把这四列标成「必需」并把删除按钮置灰（不是限制，是防止把报价单弄废）。
+ */
+const LOCKED_KEYS = ['item_name', 'quantity', 'unit_price', 'subtotal'];
+
+const LOCK_REASON = {
+  item_name: '「名称 / 阀种」删了这一行报的是什么就认不出来了',
+  quantity: '金额 = 数量 × 单价，删了这张单就没有金额',
+  unit_price: '金额 = 数量 × 单价，删了这张单就没有金额',
+  subtotal: '「小计」是合计的来源，删了合计就算不出来'
+};
+
 const LIMITS = {
   maxFields: 60,     // 单库最多自定义列数（前端横向滚动也有个上限）
   nameMax: 20,       // 列名长度
@@ -119,7 +151,14 @@ function listFields(db, opts) {
   if (!hasFieldTable(db)) {
     return {
       list: [], total: 0, enabled_count: 0, kinds: KINDS, limits: LIMITS,
-      builtins: BUILTIN_COLUMNS, order: resolveOrder(db), columns: columnsFor(db, null, { enabledOnly: false })
+      builtins: BUILTIN_COLUMNS.map((b) => Object.assign({}, b, {
+        locked: isLocked(b.key), lock_reason: LOCK_REASON[b.key] || ''
+      })),
+      order: resolveOrder(db),
+      labels: labelOverrides(db),
+      hidden: [...hiddenKeys(db)],
+      locked: LOCKED_KEYS,
+      columns: columnsFor(db, null, { enabledOnly: false })
     };
   }
   const where = ['deleted_at IS NULL'];
@@ -140,8 +179,14 @@ function listFields(db, opts) {
     kinds: KINDS,
     limits: LIMITS,
     /* 内置列定义 + 全局列顺序（界面表头、列管理、导出排版都用它） */
-    builtins: BUILTIN_COLUMNS,
+    builtins: BUILTIN_COLUMNS.map((b) => Object.assign({}, b, {
+      locked: isLocked(b.key),
+      lock_reason: LOCK_REASON[b.key] || ''
+    })),
     order: resolveOrder(db),
+    labels: labelOverrides(db),
+    hidden: [...hiddenKeys(db)],
+    locked: LOCKED_KEYS,
     columns: columnsFor(db, null, { enabledOnly: false })
   };
 }
@@ -196,6 +241,101 @@ function fieldMap(db) {
 }
 
 /* ------------------------------------------------------------------ */
+/* 设置项读写（列顺序 / 列别名 / 隐藏列）                                */
+/* ------------------------------------------------------------------ */
+
+function readSetting(db, key) {
+  try {
+    const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(key);
+    return r && r.value ? String(r.value) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function writeSetting(db, key, value, remark) {
+  db.prepare(`INSERT INTO settings (key, value, remark, updated_at) VALUES (?, ?, ?, ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .run(key, value, remark, now());
+}
+
+function readJson(db, key, fallback) {
+  const raw = readSetting(db, key);
+  if (!raw) return fallback;
+  try {
+    const v = JSON.parse(raw);
+    return (v && typeof v === 'object') ? v : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+/** 内置列的显示名覆盖 { key: label } */
+function labelOverrides(db) {
+  const o = readJson(db, LABEL_SETTING, {});
+  const out = {};
+  for (const [k, v] of Object.entries(o)) {
+    const s = String(v === undefined || v === null ? '' : v).trim();
+    if (s && DEFAULT_ORDER.includes(k)) out[k] = s;
+  }
+  return out;
+}
+
+/** 被隐藏的内置列 */
+function hiddenKeys(db) {
+  const arr = readJson(db, HIDDEN_SETTING, []);
+  const list = Array.isArray(arr) ? arr.map(String) : [];
+  /* 必需列永远不算"被隐藏"：就算设置项里写了也不生效，免得把报价单弄废 */
+  return new Set(list.filter((k) => DEFAULT_ORDER.includes(k) && !LOCKED_KEYS.includes(k)));
+}
+
+function isLocked(key) { return LOCKED_KEYS.includes(String(key)); }
+
+/** 改内置列的显示名（传空 = 恢复默认名） */
+function renameBuiltin(db, key, label) {
+  const k = String(key || '');
+  const b = BUILTIN_COLUMNS.find((c) => c.key === k);
+  if (!b) throw bad('没有这一列', 'NOT_FOUND', 404);
+
+  const name = String(label === undefined || label === null ? '' : label).trim().replace(/\s+/g, ' ');
+  if (name.length > LIMITS.nameMax) throw bad(`列名最长 ${LIMITS.nameMax} 个字`, 'NAME_TOO_LONG');
+
+  const map = labelOverrides(db);
+  if (!name || name === b.label) delete map[k];
+  else map[k] = name;
+  writeSetting(db, LABEL_SETTING, JSON.stringify(map), '内置报价列的显示名（内部使用）');
+
+  db.prepare(`INSERT INTO activity_logs (entity_type, entity_id, action, summary, detail, created_at)
+              VALUES ('quotation_field', 0, 'rename_builtin', ?, ?, ?)`)
+    .run(`列名调整：${b.label} → ${name || b.label}`, JSON.stringify({ key: k, label: name }), now());
+
+  return { key: k, label: name || b.label, default_label: b.label, renamed: !!name && name !== b.label };
+}
+
+/** 显示 / 隐藏一个内置列（隐藏 = 从表格与单据里拿掉，值仍保留） */
+function setBuiltinVisible(db, key, visible) {
+  const k = String(key || '');
+  const b = BUILTIN_COLUMNS.find((c) => c.key === k);
+  if (!b) throw bad('没有这一列', 'NOT_FOUND', 404);
+
+  if (!visible && isLocked(k)) {
+    throw bad(`${LOCK_REASON[k]}（这一列可以改名、可以移动，但不能删除）`, 'COLUMN_REQUIRED', 400);
+  }
+
+  const set = hiddenKeys(db);
+  if (visible) set.delete(k); else set.add(k);
+  writeSetting(db, HIDDEN_SETTING, JSON.stringify([...set]), '报价明细里被删掉的内置列（内部使用）');
+
+  db.prepare(`INSERT INTO activity_logs (entity_type, entity_id, action, summary, detail, created_at)
+              VALUES ('quotation_field', 0, ?, ?, ?, ?)`)
+    .run(visible ? 'show_builtin' : 'hide_builtin',
+      `${visible ? '恢复' : '删除'}内置列：${labelOverrides(db)[k] || b.label}`,
+      JSON.stringify({ key: k, visible: !!visible }), now());
+
+  return { key: k, visible: !!visible, hidden: [...set] };
+}
+
+/* ------------------------------------------------------------------ */
 /* 列顺序（全局一套）                                                  */
 /*                                                                     */
 /* 为什么放设置项而不是给表加字段：顺序是"界面偏好"，不是业务数据；     */
@@ -218,9 +358,7 @@ function readStoredOrder(db) {
 }
 
 function persistOrder(db, arr) {
-  db.prepare(`INSERT INTO settings (key, value, remark, updated_at) VALUES (?, ?, ?, ?)
-              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-    .run(ORDER_SETTING, JSON.stringify(arr), '报价明细列顺序（内部使用）', now());
+  writeSetting(db, ORDER_SETTING, JSON.stringify(arr), '报价明细列顺序（内部使用）');
 }
 
 /** 现存自定义列的键，按 sort 排（新列排在后面） */
@@ -327,6 +465,8 @@ function columnsFor(db, scope, opts) {
   const o = opts || {};
   const order = resolveOrder(db);
   const fmap = fieldMap(db);
+  const labels = labelOverrides(db);
+  const hidden = hiddenKeys(db);
 
   const allowed = scope
     ? new Set(BUILTIN_COLUMNS.filter((c) => c.scope === 'both' || c.scope === scope).map((c) => c.key))
@@ -346,7 +486,21 @@ function columnsFor(db, scope, opts) {
       const b = BUILTIN_COLUMNS.find((c) => c.key === key);
       if (!b) continue;
       if (allowed && !allowed.has(key)) continue;
-      out.push({ key, type: 'builtin', label: b.label, unit: '', kind: b.kind, scope: b.scope });
+      const isHidden = hidden.has(key);
+      if (o.enabledOnly && isHidden) continue;
+      out.push({
+        key,
+        type: 'builtin',
+        label: labels[key] || b.label,      // 改过名就用改后的
+        default_label: b.label,
+        renamed: !!labels[key],
+        unit: '',
+        kind: b.kind,
+        scope: b.scope,
+        enabled: !isHidden,                 // 与自定义列统一：enabled=false 就是被删掉（隐藏）
+        locked: isLocked(key),              // 必需列：能改名能移，不能删
+        lock_reason: LOCK_REASON[key] || ''
+      });
     }
   }
   return out;
@@ -561,6 +715,15 @@ module.exports = {
   BUILTIN_COLUMNS,
   DEFAULT_ORDER,
   ORDER_SETTING,
+  LABEL_SETTING,
+  HIDDEN_SETTING,
+  LOCKED_KEYS,
+  LOCK_REASON,
+  isLocked,
+  labelOverrides,
+  hiddenKeys,
+  renameBuiltin,
+  setBuiltinVisible,
   customKey,
   listFields,
   getField,

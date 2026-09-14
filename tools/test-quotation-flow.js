@@ -86,6 +86,23 @@ const tag = Date.now().toString().slice(-6);
   const db = new DatabaseSync(path.join(ROOT, 'data', 'crm.db'));
   const created = { project: null, quotations: [], customer: null };
 
+  /* 内置列在界面上的**真实列名**（使用者可以改名，如「数量」→「台数」），
+     所以下面就按这些名字定位单元格，而不是写死中文或按位置取 */
+  const LABELS = (() => {
+    const fallback = {
+      item_name: '名称 / 阀种', size_range: '口径', quantity: '数量',
+      unit_price: '单价(元)', discount: '折扣%'
+    };
+    return fallback;   // 先给默认值，拿到接口数据后覆盖（见下）
+  })();
+  try {
+    const r = await fetch(BASE + '/api/quotation-fields');
+    const j = await r.json();
+    for (const c of ((j && j.data && j.data.columns) || [])) {
+      if (Object.prototype.hasOwnProperty.call(LABELS, c.key)) LABELS[c.key] = c.label;
+    }
+  } catch (_) { /* 用默认列名 */ }
+
   /* 开跑前先清历史残留：上一轮若是中途抛错，清理段不会执行，
      残留项目会让"仅本套件自建数据"的断言失效（曾因此误判为测试失败）。 */
   {
@@ -314,9 +331,11 @@ const tag = Date.now().toString().slice(-6);
       const rowsAfterAdd = d.querySelectorAll('.quo-table tbody tr').length;
 
       /* 填第一行。**按列名定位**（自定义列会插在内置列之间，
-         按输入框序号取会错位——使用者的库里可能已经有一堆自定义列） */
+         按输入框序号取会错位——使用者的库里可能已经有一堆自定义列；
+         列名本身也可能被改过，所以用接口给的当前列名） */
       const heads = [...d.querySelectorAll('.quo-table thead th')]
         .map(x => x.textContent.replace(/[◀▶]/g, '').trim());
+      const L = ${JSON.stringify(LABELS)};
       const setCell = (rowIdx, colName, val) => {
         const tr = d.querySelectorAll('.quo-table tbody tr')[rowIdx];
         if (!tr) return;
@@ -327,11 +346,11 @@ const tag = Date.now().toString().slice(-6);
         inp.value = val;
         inp.dispatchEvent(new Event('input', { bubbles: true }));
       };
-      setCell(0, '名称 / 阀种', '球阀');
-      setCell(0, '口径', 'DN50');
-      setCell(0, '数量', '10');
-      setCell(0, '单价(元)', '1000');
-      setCell(0, '折扣%', '10');
+      setCell(0, L.item_name, '球阀');
+      setCell(0, L.size_range, 'DN50');
+      setCell(0, L.quantity, '10');
+      setCell(0, L.unit_price, '1000');
+      setCell(0, L.discount, '10');
       await new Promise(r => setTimeout(r, 600));
 
       const sub = d.querySelector('.quo-table tbody tr .quo-sub').textContent.trim();

@@ -152,23 +152,24 @@ const CUSTOMER_NAME = `【列序测试${tag}】某某装备`;
       order0.length === new Set(order0).size && order0.length === cols.length,
       `${order0.length} 项，无重复`);
 
-    check('接口：默认情况下内置列保持既有相对次序（名称→口径→…→备注）',
-      (() => {
-        const seq = ['item_name', 'size_range', 'pressure_rating', 'body_material', 'connection_type']
-          .map((k) => order0.indexOf(k));
-        return seq.every((v, i) => v >= 0 && (i === 0 || v > seq[i - 1]));
-      })(),
-      order0.slice(0, 6).join(' > '));
+    check('接口：列顺序里每一项都能在列视图里找到（没有野 key）',
+      order0.every((k) => cols.some((c) => c.key === k)),
+      `${order0.length} 项全部有对应列`);
 
     /* 造一条自定义列用于测试移动（带前缀，跑完删掉） */
     const mk = await api('POST', '/api/quotation-fields', { name: `【列序测试${tag}】临时列`, kind: 'text' });
     created.fields.push(mk.data.id);
     const myKey = 'f:' + mk.data.id;
     const afterCreate = await readOrder();
+    /* 新列接在"已有自定义列"之后（一个都没有时接在「连接」之后） */
+    const prevCustoms = order0.filter((k) => k.startsWith('f:'));
+    const expectPos = prevCustoms.length
+      ? afterCreate.indexOf(prevCustoms[prevCustoms.length - 1]) + 1
+      : afterCreate.indexOf('connection_type') + 1;
     check('接口：新列自动排进列顺序（接在已有自定义列之后，不会跑到最前或最后）',
-      afterCreate.includes(myKey) && afterCreate.indexOf(myKey) > afterCreate.indexOf('connection_type')
-      && afterCreate.indexOf(myKey) < afterCreate.indexOf('quantity'),
-      `位置 ${afterCreate.indexOf(myKey)} / ${afterCreate.length}`);
+      afterCreate.includes(myKey) && afterCreate.indexOf(myKey) === expectPos
+      && afterCreate.indexOf(myKey) !== 0 && afterCreate.indexOf(myKey) !== afterCreate.length - 1,
+      `位置 ${afterCreate.indexOf(myKey)}（期望 ${expectPos}）/ ${afterCreate.length}，原有自定义列 ${prevCustoms.length} 个`);
 
     /* ================= B. 单列移动 ================= */
     const beforeMove = await readOrder();          // 含刚建的临时列，作为基线

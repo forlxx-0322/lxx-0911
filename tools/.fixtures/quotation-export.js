@@ -28,18 +28,31 @@ function buildWorkbookAoa(d, XLSX) {
     (it) => it.extra && String(it.extra[c.name] || '').trim() !== ''
   ));
 
-  /* 单据列按全局列顺序排；「规格型号」是 5 个规格字段合并成一列，取其中最靠前的位置 */
+  /* 单据列按全局列顺序排；被删掉的内置列不进单据；改过名的用改后的名字。
+     「规格型号」是几个规格字段合并成一列，取其中最靠前的位置，删掉哪个就不再带哪个。 */
   const order = Array.isArray(d.column_order) ? d.column_order : [];
+  const labels = d.column_labels || {};
+  const hidden = new Set(d.hidden_columns || []);
+  const L = (key, dflt) => labels[key] || dflt;
   const rank = (key) => {
     const i = order.indexOf(key);
     return i < 0 ? 9999 : i;
   };
-  const SPEC_KEYS = ['valve_type', 'size_range', 'pressure_rating', 'body_material', 'connection_type'];
-  const specRank = Math.min(...SPEC_KEYS.map(rank));
+  const specKeys = ['valve_type', 'size_range', 'pressure_rating', 'body_material', 'connection_type']
+    .filter((k) => !hidden.has(k));
+  const specRank = specKeys.length ? Math.min(...specKeys.map(rank)) : 9999;
 
   const slots = [
-    { key: 'name', label: '产品名称', rank: rank('item_name'), width: 18, value: (it) => it.item_name || '' },
-    { key: 'spec', label: '规格型号', rank: specRank, width: 30, value: (it) => it.spec || '' },
+    {
+      key: 'name', label: L('item_name', '产品名称'), rank: rank('item_name'), width: 18,
+      value: (it) => it.item_name || ''
+    },
+    {
+      key: 'spec', label: '规格型号', rank: specRank, width: 30,
+      value: (it) => (specKeys.length
+        ? specKeys.map((k) => it[k]).filter(Boolean).join(' ')
+        : (it.spec || ''))
+    },
     ...custom.map((c) => ({
       key: 'c:' + c.id,
       label: c.unit ? `${c.name}（${c.unit}）` : c.name,
@@ -48,19 +61,32 @@ function buildWorkbookAoa(d, XLSX) {
       kind: c.kind,
       value: (it) => ((it.extra && it.extra[c.name] !== undefined) ? it.extra[c.name] : '')
     })),
-    { key: 'quantity', label: '数量', rank: rank('quantity'), width: 8, right: true, center: true, value: (it) => it.quantity },
-    { key: 'unit', label: '单位', rank: rank('unit'), width: 6, center: true, value: (it) => it.unit || '' },
-    { key: 'unit_price', label: '单价(元)', rank: rank('unit_price'), width: 13, right: true, value: (it) => fmt(it.unit_price) },
+    {
+      key: 'quantity', label: L('quantity', '数量'), rank: rank('quantity'), width: 8,
+      right: true, center: true, value: (it) => it.quantity
+    },
+    {
+      key: 'unit', label: L('unit', '单位'), rank: rank('unit'), width: 6,
+      center: true, value: (it) => it.unit || ''
+    },
+    {
+      key: 'unit_price', label: L('unit_price', '单价(元)'), rank: rank('unit_price'), width: 13,
+      right: true, value: (it) => fmt(it.unit_price)
+    },
     {
       key: 'discount',
-      label: '折扣',
+      label: L('discount', '折扣'),
       rank: rank('discount'),
       width: 8,
       center: true,
       value: (it) => (it.discount ? `${Math.round(money(it.discount) * 10000) / 100}%` : '—')
     },
-    { key: 'subtotal', label: '小计(元)', rank: rank('subtotal'), width: 15, right: true, value: (it) => fmt(it.subtotal) }
-  ].sort((a, b) => a.rank - b.rank);
+    {
+      key: 'subtotal', label: L('subtotal', '小计(元)'), rank: rank('subtotal'), width: 15,
+      right: true, value: (it) => fmt(it.subtotal)
+    }
+  ].filter((s) => !hidden.has(s.key) && (s.key !== 'spec' || specKeys.length > 0))
+    .sort((a, b) => a.rank - b.rank);
 
   const COLS = 1 + slots.length;          // 首列是「序号」
   const SUM_AT = 1 + slots.findIndex((s) => s.key === 'subtotal');

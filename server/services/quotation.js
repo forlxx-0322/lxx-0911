@@ -505,8 +505,10 @@ function exportData(db, id, settings) {
     project_name: q.project_name || '',
     total_amount: money(q.total_amount),
     custom_columns: custom,
-    /* 全局列顺序：前端排版单据时按它决定"哪一列在前" */
+    /* 全局列顺序 + 被删掉的内置列：前端据此排版单据（隐藏的列不进单据） */
     column_order: fieldsvc.resolveOrder(db),
+    hidden_columns: [...fieldsvc.hiddenKeys(db)],
+    column_labels: fieldsvc.labelOverrides(db),
     items: items.map((it) => ({
       seq: it.seq,
       item_name: it.item_name,

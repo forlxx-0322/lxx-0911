@@ -1049,6 +1049,9 @@ const SETTINGS_SEED = [
   ['quote_no_prefix', 'BJ', '报价单号前缀'],
   ['quote_company', '', '报价单抬头公司名（留空用「我方公司名称」）'],
   ['quote_contact', '', '报价单联系方式'],
+  /* 报价明细的列顺序（JSON 数组：内置列 key 或 f:<自定义列id>）。
+     留空 = 用默认顺序；在报价单/报价模板的表头上就能调，不需要动这里。 */
+  ['quotation_column_order', '', '报价明细列顺序（留空用默认顺序）'],
   /* 邮件提醒的运行时状态（由 notify 模块维护，便于重启后仍能判断与降级） */
   ['remind_email_fail_streak', '0', '邮件提醒连续失败次数'],
   ['remind_email_last_at', '', '邮件提醒上次尝试时间'],

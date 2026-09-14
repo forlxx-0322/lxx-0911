@@ -28,6 +28,36 @@ const FIELD_FIELDS = ['name', 'kind', 'options', 'unit', 'sort', 'enabled', 'rem
 
 const KINDS = ['text', 'number', 'select'];
 
+/**
+ * 内置列 —— 结构固定、不可改名或删除，但**位置可以移动**（见「列顺序」一节）。
+ *
+ * scope：both = 报价单与模板都有；quotation = 只有报价单有（模板不带价格）；
+ * template = 只有模板有（目前没有这种列，保留扩展位）。
+ */
+const BUILTIN_COLUMNS = [
+  { key: 'item_name', label: '名称 / 阀种', scope: 'both', kind: 'text' },
+  { key: 'size_range', label: '口径', scope: 'both', kind: 'text' },
+  { key: 'pressure_rating', label: '压力', scope: 'both', kind: 'text' },
+  { key: 'body_material', label: '阀体材质', scope: 'both', kind: 'text' },
+  { key: 'connection_type', label: '连接', scope: 'both', kind: 'text' },
+  { key: 'quantity', label: '数量', scope: 'both', kind: 'number' },
+  { key: 'unit', label: '单位', scope: 'both', kind: 'text' },
+  { key: 'unit_price', label: '单价(元)', scope: 'quotation', kind: 'number' },
+  { key: 'discount', label: '折扣%', scope: 'quotation', kind: 'number' },
+  { key: 'subtotal', label: '小计(元)', scope: 'quotation', kind: 'computed' },
+  { key: 'delivery_days', label: '交期(天)', scope: 'both', kind: 'number' },
+  { key: 'remark', label: '备注', scope: 'both', kind: 'text' }
+];
+
+/** 默认列序（与 1.15 之前的固定表头一致；自定义列默认落在「连接」之后） */
+const DEFAULT_ORDER = BUILTIN_COLUMNS.map((c) => c.key);
+
+/** 自定义列的默认落位：接在「连接」后面（这也是 1.15 之前的观感） */
+const CUSTOM_ANCHOR = 'connection_type';
+
+/** 列序存放的设置项 key（存的是 JSON 数组，元素为内置列 key 或 `f:<列id>`） */
+const ORDER_SETTING = 'quotation_column_order';
+
 const LIMITS = {
   maxFields: 60,     // 单库最多自定义列数（前端横向滚动也有个上限）
   nameMax: 20,       // 列名长度
@@ -87,7 +117,10 @@ function optionsArray(row) {
 function listFields(db, opts) {
   const o = opts || {};
   if (!hasFieldTable(db)) {
-    return { list: [], total: 0, enabled_count: 0, kinds: KINDS, limits: LIMITS };
+    return {
+      list: [], total: 0, enabled_count: 0, kinds: KINDS, limits: LIMITS,
+      builtins: BUILTIN_COLUMNS, order: resolveOrder(db), columns: columnsFor(db, null, { enabledOnly: false })
+    };
   }
   const where = ['deleted_at IS NULL'];
   if (o.enabledOnly) where.push('enabled = 1');
@@ -105,7 +138,11 @@ function listFields(db, opts) {
     total: rows.length,
     enabled_count: all.filter((r) => r.enabled).length,
     kinds: KINDS,
-    limits: LIMITS
+    limits: LIMITS,
+    /* 内置列定义 + 全局列顺序（界面表头、列管理、导出排版都用它） */
+    builtins: BUILTIN_COLUMNS,
+    order: resolveOrder(db),
+    columns: columnsFor(db, null, { enabledOnly: false })
   };
 }
 
@@ -156,6 +193,163 @@ function fieldMap(db) {
     map.set(String(r.id), plain(r));
   }
   return map;
+}
+
+/* ------------------------------------------------------------------ */
+/* 列顺序（全局一套）                                                  */
+/*                                                                     */
+/* 为什么放设置项而不是给表加字段：顺序是"界面偏好"，不是业务数据；     */
+/* 存成 settings 里的一条 JSON 数组即可，**不需要迁移**，              */
+/* 报价模板、报价单明细、导出单据三处共用同一套顺序。                   */
+/* ------------------------------------------------------------------ */
+
+/** 自定义列在顺序数组里的键（内置列直接用列 key，自定义列用 f:<id>） */
+const customKey = (id) => `f:${id}`;
+
+function readStoredOrder(db) {
+  try {
+    const r = db.prepare('SELECT value FROM settings WHERE key = ?').get(ORDER_SETTING);
+    if (!r || !r.value) return [];
+    const arr = JSON.parse(r.value);
+    return Array.isArray(arr) ? arr.map(String) : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function persistOrder(db, arr) {
+  db.prepare(`INSERT INTO settings (key, value, remark, updated_at) VALUES (?, ?, ?, ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .run(ORDER_SETTING, JSON.stringify(arr), '报价明细列顺序（内部使用）', now());
+}
+
+/** 现存自定义列的键，按 sort 排（新列排在后面） */
+function liveCustomKeys(db) {
+  if (!hasFieldTable(db)) return [];
+  return db.prepare(
+    'SELECT id FROM quotation_fields WHERE deleted_at IS NULL ORDER BY sort ASC, id ASC'
+  ).all().map((r) => customKey(r.id));
+}
+
+/**
+ * 解析出完整的列顺序。
+ *
+ * 容错三件事（都要做，否则用户会看到"列凭空消失"）：
+ *   1. 顺序数组里已不存在的键（列被删了）→ 丢掉
+ *   2. 顺序数组里**没有**的列（新加的列 / 本次升级后才有的内置列）→ 按默认位置补进去
+ *   3. 顺序数组本身为空（从没排过）→ 用默认顺序
+ *
+ * @param {Array} [base] 可选的起点（保存时传用户传来的顺序）
+ */
+function resolveOrder(db, base) {
+  const builtinKeys = DEFAULT_ORDER;
+  const customKeys = liveCustomKeys(db);
+  const known = new Set([...builtinKeys, ...customKeys]);
+
+  const stored = Array.isArray(base) ? base : readStoredOrder(db);
+  const seen = new Set();
+  const out = [];
+  for (const raw of stored) {
+    const key = String(raw);
+    if (!known.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+
+  /**
+   * 缺失的内置列：**优先插到"默认顺序里它前一个已存在的列"之后**，
+   * 找不到前驱才退而插到后一个已存在列之前。
+   *
+   * 为什么前驱优先：用户只保存了部分列时（例如只把「备注」拖到最前、
+   * 只显式给出 ['remark','item_name']），其余列应当补在各自的常规位置附近，
+   * 而不是统统挤到「备注」前面去。
+   */
+  const insertBuiltin = (key, idx) => {
+    for (let j = idx - 1; j >= 0; j--) {
+      const at = out.indexOf(builtinKeys[j]);
+      if (at >= 0) { out.splice(at + 1, 0, key); return; }
+    }
+    for (let j = idx + 1; j < builtinKeys.length; j++) {
+      const at = out.indexOf(builtinKeys[j]);
+      if (at >= 0) { out.splice(at, 0, key); return; }
+    }
+    out.push(key);
+  };
+  builtinKeys.forEach((key, i) => { if (!out.includes(key)) insertBuiltin(key, i); });
+
+  /** 缺失的自定义列：接在最后一个自定义列之后，没有就接在「连接」之后 */
+  for (const key of customKeys) {
+    if (out.includes(key)) continue;
+    const customs = out.filter((k) => k.startsWith('f:'));
+    const anchor = customs.length ? customs[customs.length - 1] : CUSTOM_ANCHOR;
+    const at = out.indexOf(anchor);
+    if (at >= 0) out.splice(at + 1, 0, key); else out.push(key);
+  }
+
+  return out.filter((k) => known.has(k));
+}
+
+/** 保存列顺序（缺的列自动补齐，不会因为前端少传就丢列） */
+function saveOrder(db, order) {
+  const merged = resolveOrder(db, order);
+  persistOrder(db, merged);
+  return merged;
+}
+
+/**
+ * 移动一列（左右/上下都走这里）。
+ * @param {string} key 内置列 key 或 `f:<列id>`
+ */
+function moveColumn(db, key, dir) {
+  const order = resolveOrder(db);
+  const at = order.indexOf(String(key));
+  if (at < 0) throw bad('这一列不存在或已删除', 'NOT_FOUND', 404);
+
+  const back = dir === 'up' || dir === 'left';
+  const to = back ? at - 1 : at + 1;
+  if (to < 0) return { moved: false, message: '已经在最前面', order };
+  if (to >= order.length) return { moved: false, message: '已经在最后面', order };
+
+  const next = order.slice();
+  next[at] = order[to];
+  next[to] = order[at];
+  persistOrder(db, next);
+  return { moved: true, message: back ? '已前移' : '已后移', key: String(key), order: next };
+}
+
+/**
+ * 表格要显示的列（按全局列顺序）。
+ *
+ * @param {string} [scope] 'quotation' | 'template' | 空（空 = 全部列，列管理用）
+ * @param {object} [opts]  { enabledOnly: 只返回启用的自定义列（表格用） }
+ */
+function columnsFor(db, scope, opts) {
+  const o = opts || {};
+  const order = resolveOrder(db);
+  const fmap = fieldMap(db);
+
+  const allowed = scope
+    ? new Set(BUILTIN_COLUMNS.filter((c) => c.scope === 'both' || c.scope === scope).map((c) => c.key))
+    : null;
+
+  const out = [];
+  for (const key of order) {
+    if (key.startsWith('f:')) {
+      const f = fmap.get(key.slice(2));
+      if (!f) continue;
+      if (o.enabledOnly && !f.enabled) continue;
+      out.push({
+        key, type: 'custom', id: f.id, label: f.name, unit: f.unit || '',
+        kind: f.kind, enabled: !!f.enabled, options_list: optionsArray(f)
+      });
+    } else {
+      const b = BUILTIN_COLUMNS.find((c) => c.key === key);
+      if (!b) continue;
+      if (allowed && !allowed.has(key)) continue;
+      out.push({ key, type: 'builtin', label: b.label, unit: '', kind: b.kind, scope: b.scope });
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */
@@ -292,6 +486,15 @@ function saveField(db, payload) {
       ).run(...cols.map((k) => data[k]), ts, ts);
       fid = Number(r.lastInsertRowid);
       created = true;
+
+      /* 新列落位：接在已有自定义列之后（没有自定义列就接在「连接」之后），
+         之后可以用表头上的 ◀ ▶ 挪到任意位置 */
+      const order = resolveOrder(db);
+      const customs = order.filter((k) => k.startsWith('f:'));
+      const anchor = customs.length ? customs[customs.length - 1] : CUSTOM_ANCHOR;
+      const at = order.indexOf(anchor);
+      order.splice(at >= 0 ? at + 1 : order.length, 0, customKey(fid));
+      persistOrder(db, order);
     }
 
     db.prepare(`INSERT INTO activity_logs (entity_type, entity_id, action, summary, detail, created_at)
@@ -308,40 +511,16 @@ function saveField(db, payload) {
   }
 }
 
-/** 调整列顺序（与报价模板同一套上下交换逻辑） */
+/** 调整列顺序（列管理里的 ↑↓ 与表头上的 ◀ ▶ 都走这里，同一套全局列序） */
 function moveField(db, id, dir) {
-  const cur = db.prepare(
-    'SELECT id, sort FROM quotation_fields WHERE id = ? AND deleted_at IS NULL'
-  ).get(Number(id));
-  if (!cur) throw bad('这一列不存在或已删除', 'NOT_FOUND', 404);
+  const f = db.prepare('SELECT id FROM quotation_fields WHERE id = ? AND deleted_at IS NULL').get(Number(id));
+  if (!f) throw bad('这一列不存在或已删除', 'NOT_FOUND', 404);
+  return moveColumn(db, customKey(f.id), dir);
+}
 
-  const target = dir === 'up'
-    ? db.prepare(`SELECT id, sort FROM quotation_fields
-                  WHERE deleted_at IS NULL AND (sort < ? OR (sort = ? AND id < ?))
-                  ORDER BY sort DESC, id DESC LIMIT 1`).get(cur.sort, cur.sort, cur.id)
-    : db.prepare(`SELECT id, sort FROM quotation_fields
-                  WHERE deleted_at IS NULL AND (sort > ? OR (sort = ? AND id > ?))
-                  ORDER BY sort ASC, id ASC LIMIT 1`).get(cur.sort, cur.sort, cur.id);
-  if (!target) return { moved: false, message: dir === 'up' ? '已经在最前面' : '已经在最后面' };
-
-  const ts = now();
-  db.exec('BEGIN');
-  try {
-    const a = cur.sort;
-    const b = target.sort;
-    if (a === b) {
-      db.prepare('UPDATE quotation_fields SET sort = ?, updated_at = ? WHERE id = ?')
-        .run(a + (dir === 'up' ? -1 : 1), ts, cur.id);
-    } else {
-      db.prepare('UPDATE quotation_fields SET sort = ?, updated_at = ? WHERE id = ?').run(b, ts, cur.id);
-      db.prepare('UPDATE quotation_fields SET sort = ?, updated_at = ? WHERE id = ?').run(a, ts, target.id);
-    }
-    db.exec('COMMIT');
-  } catch (e) {
-    try { db.exec('ROLLBACK'); } catch (_) { /* 忽略 */ }
-    throw e;
-  }
-  return { moved: true, message: dir === 'up' ? '已上移' : '已下移' };
+/** 兼容旧接口名：移动任意列（内置列也支持） */
+function moveAnyColumn(db, key, dir) {
+  return moveColumn(db, key, dir);
 }
 
 /**
@@ -365,6 +544,8 @@ function removeField(db, id) {
 
   const ts = now();
   db.prepare('UPDATE quotation_fields SET deleted_at = ?, updated_at = ? WHERE id = ?').run(ts, ts, Number(id));
+  /* 顺手把这一列从列顺序里摘掉（resolveOrder 本来也会过滤，但存着干净） */
+  persistOrder(db, resolveOrder(db));
   db.prepare(`INSERT INTO activity_logs (entity_type, entity_id, action, summary, detail, created_at)
               VALUES ('quotation_field', ?, 'delete', ?, ?, ?)`)
     .run(Number(id), `删除报价自定义列：${f.name}`,
@@ -377,10 +558,19 @@ module.exports = {
   FIELD_FIELDS,
   KINDS,
   LIMITS,
+  BUILTIN_COLUMNS,
+  DEFAULT_ORDER,
+  ORDER_SETTING,
+  customKey,
   listFields,
   getField,
   fieldMap,
   liveFieldIds,
+  resolveOrder,
+  saveOrder,
+  moveColumn,
+  moveAnyColumn,
+  columnsFor,
   normalizeExtra,
   parseExtra,
   extraHasValue,

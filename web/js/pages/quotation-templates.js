@@ -23,6 +23,22 @@ window.CRM = window.CRM || {};
     };
   }
 
+  /**
+   * 内置列在表格里的"骨架"（模板不含价格列）。
+   * 列顺序不在这里定 —— 顺序由服务端的全局列序决定，与报价单共用。
+   */
+  const BUILTIN_UI = {
+    item_name: { width: 140, type: 'text', placeholder: '如 球阀', list: 'tpl-valve' },
+    size_range: { width: 100, type: 'text', placeholder: 'DN50', list: 'tpl-size' },
+    pressure_rating: { width: 104, type: 'text', placeholder: 'Class150', list: 'tpl-pr' },
+    body_material: { width: 110, type: 'text', placeholder: 'WCB', list: 'tpl-mat' },
+    connection_type: { width: 96, type: 'text', placeholder: '法兰', list: 'tpl-conn' },
+    quantity: { width: 76, type: 'number', min: 0 },
+    unit: { width: 60, type: 'text' },
+    delivery_days: { width: 70, type: 'number', min: 0 },
+    remark: { width: 130, type: 'text' }
+  };
+
   const TemplatePanel = {
     name: 'QuotationTemplatePanel',
     data() {
@@ -38,38 +54,75 @@ window.CRM = window.CRM || {};
         form: { name: '', category: '', description: '', unit: '台', enabled: 1, items: [blankItem()] },
         saving: false,
         errors: {},
-        /* 自定义列（与报价单共用同一套列） */
-        fields: []
+        /* 明细表的列（内置列 + 自定义列，按全局列顺序，与报价单共用） */
+        columns: [],
+        ui: BUILTIN_UI
       };
     },
     computed: {
       isEdit() { return !!(this.editing && this.editing.id); },
       drawerTitle() { return this.isEdit ? `编辑模板「${this.editing.name}」` : '新建报价模板'; },
       dict() { return CRM.api.cache.dict.options || {}; },
-      totalItems() { return this.list.reduce((s, t) => s + (t.item_count || 0), 0); }
+      totalItems() { return this.list.reduce((s, t) => s + (t.item_count || 0), 0); },
+      customCount() { return this.columns.filter((c) => c.type === 'custom').length; }
     },
     async created() {
       await CRM.api.loadDict();
-      this.syncFields();
-      this.offFields = CRM.quotationFields.onChange((list) => { this.fields = list; });
-      await Promise.all([this.load(), this.loadFields()]);
+      this.syncColumns();
+      this.offColumns = CRM.quotationFields.onChange(() => { this.syncColumns(); });
+      await Promise.all([this.load(), this.loadColumns()]);
     },
     beforeUnmount() {
-      if (this.offFields) this.offFields();
+      if (this.offColumns) this.offColumns();
     },
     methods: {
-      /* ---------------- 自定义列 ---------------- */
-      syncFields() { this.fields = CRM.quotationFields.enabled(); },
-      async loadFields() {
+      /* ---------------- 明细列（内置 + 自定义，全局一套列序） ---------------- */
+      syncColumns() { this.columns = CRM.quotationFields.columnsFor('template'); },
+      async loadColumns() {
         try {
           await CRM.quotationFields.load(true);
-          this.syncFields();
+          this.syncColumns();
         } catch (_) { /* 读列失败不影响模板本身 */ }
       },
       openFields() { CRM.quotationFields.open(); },
-      fieldWidth(f) {
-        const label = String(f.name || '') + (f.unit ? `（${f.unit}）` : '');
-        return Math.min(160, Math.max(84, label.length * 13 + 26)) + 'px';
+
+      /** 表头上的 ◀ ▶：在全局列序里把这一列前后挪一位（与报价单是同一套顺序） */
+      async moveColumn(col, dir) {
+        try {
+          await CRM.quotationFields.moveColumn(col.key, dir);
+        } catch (e) {
+          CRM.toast(e.message || '调整列顺序失败', 'error');
+        }
+      },
+
+      colWidth(col) {
+        const u = this.ui[col.key];
+        if (u && u.width) return u.width + 'px';
+        const label = String(col.label || '') + (col.unit ? `（${col.unit}）` : '');
+        return Math.min(170, Math.max(84, label.length * 13 + 26)) + 'px';
+      },
+
+      isNumCol(col) {
+        const u = this.ui[col.key];
+        return col.type === 'custom' ? col.kind === 'number' : !!(u && u.type === 'number');
+      },
+
+      inputAttrs(col) {
+        if (col.type === 'custom') {
+          return {
+            type: col.kind === 'number' ? 'number' : 'text',
+            step: col.kind === 'number' ? 'any' : null,
+            list: col.kind === 'select' ? ('tqf-' + col.id) : null
+          };
+        }
+        const u = this.ui[col.key] || {};
+        return {
+          type: u.type === 'number' ? 'number' : 'text',
+          min: u.min === undefined ? null : u.min,
+          step: u.type === 'number' ? 'any' : null,
+          list: u.list || null,
+          placeholder: u.placeholder || ''
+        };
       },
 
       async load() {
@@ -237,7 +290,9 @@ window.CRM = window.CRM || {};
             <div style="font-size:var(--fs-xs)">
               模板里<strong>只存规格，不存价格</strong>——单价随项目与行情变，
               套用后由你填价，避免直接报出过期价。<br>
-              在报价单里可以「存为模板」，把实际报过好用的组合直接沉淀下来。
+              在报价单里可以「存为模板」，把实际报过好用的组合直接沉淀下来。<br>
+              <strong>列顺序是全局的</strong>：把鼠标移到表头上点 ◀ ▶ 就能挪列
+              （内置列和自定义列都能挪），报价单明细与导出单据会跟着一起变。
             </div>
           </div>
 
@@ -319,8 +374,8 @@ window.CRM = window.CRM || {};
             <div class="quo-items-title">规格明细</div>
             <div style="flex:1"></div>
             <button class="btn btn-sm" type="button" @click="openFields"
-                    title="增删自定义列：介质、设计压力、设计温度、泄露等级、执行器型号…（列数不限）">
-              ⚙ 自定义列<span v-if="fields.length">（{{ fields.length }}）</span>
+                    title="增删自定义列、调整列顺序（介质、设计压力、设计温度、泄露等级、执行器型号…）">
+              ⚙ 自定义列<span v-if="customCount">（{{ customCount }}）</span>
             </button>
             <button class="btn btn-sm" type="button" @click="addRow">+ 增加一行</button>
           </div>
@@ -331,64 +386,30 @@ window.CRM = window.CRM || {};
               <thead>
                 <tr>
                   <th style="width:34px">#</th>
-                  <th style="width:140px">名称 / 阀种</th>
-                  <th style="width:100px">口径</th>
-                  <th style="width:104px">压力</th>
-                  <th style="width:110px">阀体材质</th>
-                  <th style="width:96px">连接</th>
-                  <th v-for="f in fields" :key="f.id" :style="{width: fieldWidth(f)}">
-                    {{ f.name }}<span v-if="f.unit" class="quo-th-unit">（{{ f.unit }}）</span>
+                  <th v-for="(col, ci) in columns" :key="col.key" :style="{ width: colWidth(col) }">
+                    <div class="quo-th">
+                      <span class="quo-th-label">{{ col.label }}<span v-if="col.unit" class="quo-th-unit">（{{ col.unit }}）</span></span>
+                      <span class="col-move">
+                        <button type="button" class="icon-btn" title="左移一列" :disabled="ci === 0"
+                                @click="moveColumn(col, 'left')">◀</button>
+                        <button type="button" class="icon-btn" title="右移一列" :disabled="ci === columns.length - 1"
+                                @click="moveColumn(col, 'right')">▶</button>
+                      </span>
+                    </div>
                   </th>
-                  <th style="width:76px">数量</th>
-                  <th style="width:60px">单位</th>
-                  <th style="width:70px">交期</th>
-                  <th style="width:130px">备注</th>
                   <th style="width:86px">操作</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(it, i) in form.items" :key="i">
                   <td class="quo-seq">{{ i + 1 }}</td>
-                  <td>
-                    <input class="input input-sm" v-model="it.item_name" list="tpl-valve" placeholder="如 球阀" />
-                    <datalist id="tpl-valve">
-                      <option v-for="o in (dict.valve_type || [])" :key="o" :value="o"></option>
-                    </datalist>
+                  <td v-for="col in columns" :key="col.key">
+                    <input v-if="col.type === 'custom'" class="input input-sm"
+                           :class="{ num: isNumCol(col) }" v-bind="inputAttrs(col)"
+                           v-model="it.extra[col.id]" />
+                    <input v-else class="input input-sm" :class="{ num: isNumCol(col) }"
+                           v-bind="inputAttrs(col)" v-model="it[col.key]" />
                   </td>
-                  <td>
-                    <input class="input input-sm" v-model="it.size_range" list="tpl-size" placeholder="DN50" />
-                    <datalist id="tpl-size">
-                      <option v-for="o in (dict.size_range || [])" :key="o" :value="o"></option>
-                    </datalist>
-                  </td>
-                  <td>
-                    <input class="input input-sm" v-model="it.pressure_rating" list="tpl-pr" placeholder="Class150" />
-                    <datalist id="tpl-pr">
-                      <option v-for="o in (dict.pressure_rating || [])" :key="o" :value="o"></option>
-                    </datalist>
-                  </td>
-                  <td>
-                    <input class="input input-sm" v-model="it.body_material" list="tpl-mat" placeholder="WCB" />
-                    <datalist id="tpl-mat">
-                      <option v-for="o in (dict.body_material || [])" :key="o" :value="o"></option>
-                    </datalist>
-                  </td>
-                  <td>
-                    <input class="input input-sm" v-model="it.connection_type" list="tpl-conn" placeholder="法兰" />
-                    <datalist id="tpl-conn">
-                      <option v-for="o in (dict.connection_type || [])" :key="o" :value="o"></option>
-                    </datalist>
-                  </td>
-                  <td v-for="f in fields" :key="f.id">
-                    <input class="input input-sm" :class="{ num: f.kind === 'number' }"
-                           :type="f.kind === 'number' ? 'number' : 'text'"
-                           :list="f.kind === 'select' ? ('tqf-' + f.id) : null"
-                           v-model="it.extra[f.id]" />
-                  </td>
-                  <td><input class="input input-sm num" type="number" min="0" step="any" v-model="it.quantity" /></td>
-                  <td><input class="input input-sm" v-model="it.unit" /></td>
-                  <td><input class="input input-sm num" type="number" min="0" v-model="it.delivery_days" /></td>
-                  <td><input class="input input-sm" v-model="it.remark" /></td>
                   <td class="quo-ops">
                     <button class="icon-btn" title="复制本行" @click="copyDown(i)">⧉</button>
                     <button class="icon-btn" title="上移" @click="moveRow(i, -1)">↑</button>
@@ -402,9 +423,24 @@ window.CRM = window.CRM || {};
 
           <!-- 下拉候选值：统一放表格外，避免每行重复渲染 datalist -->
           <div style="display:none">
-            <template v-for="f in fields" :key="f.id">
-              <datalist v-if="f.kind === 'select'" :id="'tqf-' + f.id">
-                <option v-for="o in (f.options_list || [])" :key="o" :value="o"></option>
+            <datalist id="tpl-valve">
+              <option v-for="o in (dict.valve_type || [])" :key="o" :value="o"></option>
+            </datalist>
+            <datalist id="tpl-size">
+              <option v-for="o in (dict.size_range || [])" :key="o" :value="o"></option>
+            </datalist>
+            <datalist id="tpl-pr">
+              <option v-for="o in (dict.pressure_rating || [])" :key="o" :value="o"></option>
+            </datalist>
+            <datalist id="tpl-mat">
+              <option v-for="o in (dict.body_material || [])" :key="o" :value="o"></option>
+            </datalist>
+            <datalist id="tpl-conn">
+              <option v-for="o in (dict.connection_type || [])" :key="o" :value="o"></option>
+            </datalist>
+            <template v-for="col in columns" :key="col.key">
+              <datalist v-if="col.type === 'custom' && col.kind === 'select'" :id="'tqf-' + col.id">
+                <option v-for="o in (col.options_list || [])" :key="o" :value="o"></option>
               </datalist>
             </template>
           </div>

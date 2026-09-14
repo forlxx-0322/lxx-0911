@@ -174,6 +174,10 @@ window.CRM = window.CRM || {};
       : request('POST', '/api/quotation-fields', data),
     deleteQuotationField: (id) => request('DELETE', `/api/quotation-fields/${id}`),
     moveQuotationField: (id, dir) => request('POST', `/api/quotation-fields/${id}/move`, { dir }),
+    /* 移动任意列（内置列也算），key 形如 'remark' 或 'f:12' */
+    moveQuotationColumn: (key, dir) => request('POST', '/api/quotation-fields/move', { key, dir }),
+    quotationColumnOrder: () => request('GET', '/api/quotation-fields/order'),
+    saveQuotationColumnOrder: (order) => request('POST', '/api/quotation-fields/order', { order }),
 
     /* 客户 */
     listCustomers: (params) => request('GET', '/api/customers?' + toQuery(params)),

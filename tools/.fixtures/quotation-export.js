@@ -28,9 +28,43 @@ function buildWorkbookAoa(d, XLSX) {
     (it) => it.extra && String(it.extra[c.name] || '').trim() !== ''
   ));
 
-  const COLS = 8 + custom.length;
-  const C_CUSTOM0 = 3;
-  const C_QTY = C_CUSTOM0 + custom.length;
+  /* 单据列按全局列顺序排；「规格型号」是 5 个规格字段合并成一列，取其中最靠前的位置 */
+  const order = Array.isArray(d.column_order) ? d.column_order : [];
+  const rank = (key) => {
+    const i = order.indexOf(key);
+    return i < 0 ? 9999 : i;
+  };
+  const SPEC_KEYS = ['valve_type', 'size_range', 'pressure_rating', 'body_material', 'connection_type'];
+  const specRank = Math.min(...SPEC_KEYS.map(rank));
+
+  const slots = [
+    { key: 'name', label: '产品名称', rank: rank('item_name'), width: 18, value: (it) => it.item_name || '' },
+    { key: 'spec', label: '规格型号', rank: specRank, width: 30, value: (it) => it.spec || '' },
+    ...custom.map((c) => ({
+      key: 'c:' + c.id,
+      label: c.unit ? `${c.name}（${c.unit}）` : c.name,
+      rank: rank('f:' + c.id),
+      width: 14,
+      kind: c.kind,
+      value: (it) => ((it.extra && it.extra[c.name] !== undefined) ? it.extra[c.name] : '')
+    })),
+    { key: 'quantity', label: '数量', rank: rank('quantity'), width: 8, right: true, center: true, value: (it) => it.quantity },
+    { key: 'unit', label: '单位', rank: rank('unit'), width: 6, center: true, value: (it) => it.unit || '' },
+    { key: 'unit_price', label: '单价(元)', rank: rank('unit_price'), width: 13, right: true, value: (it) => fmt(it.unit_price) },
+    {
+      key: 'discount',
+      label: '折扣',
+      rank: rank('discount'),
+      width: 8,
+      center: true,
+      value: (it) => (it.discount ? `${Math.round(money(it.discount) * 10000) / 100}%` : '—')
+    },
+    { key: 'subtotal', label: '小计(元)', rank: rank('subtotal'), width: 15, right: true, value: (it) => fmt(it.subtotal) }
+  ].sort((a, b) => a.rank - b.rank);
+
+  const COLS = 1 + slots.length;          // 首列是「序号」
+  const SUM_AT = 1 + slots.findIndex((s) => s.key === 'subtotal');
+
   const aoa = [];
   const merges = [];
   const rowMeta = [];
@@ -53,32 +87,26 @@ function buildWorkbookAoa(d, XLSX) {
   }
   blank(4);
 
-  const header = ['序号', '产品名称', '规格型号'];
-  for (const c of custom) header.push(c.unit ? `${c.name}（${c.unit}）` : c.name);
-  header.push('数量', '单位', '单价(元)', '折扣', '小计(元)');
-  push(header, { bold: true, size: 10, align: 'center', height: 20, border: true, fill: true });
-
-  const alignRight = [C_QTY, C_QTY + 2, C_QTY + 4];
-  const alignCenter = [0, C_QTY + 1, C_QTY + 3];
-  custom.forEach((c, i) => { if (c.kind === 'number') alignRight.push(C_CUSTOM0 + i); });
+  push(['序号', ...slots.map((s) => s.label)],
+    { bold: true, size: 10, align: 'center', height: 20, border: true, fill: true });
 
   for (const it of (d.items || [])) {
-    const row = [it.seq, it.item_name || '', it.spec || ''];
-    for (const c of custom) {
-      row.push((it.extra && it.extra[c.name] !== undefined) ? it.extra[c.name] : '');
-    }
-    row.push(it.quantity, it.unit || '',
-      fmt(it.unit_price),
-      it.discount ? `${Math.round(money(it.discount) * 10000) / 100}%` : '—',
-      fmt(it.subtotal));
+    const row = [it.seq];
+    const alignRight = [];
+    const alignCenter = [0];
+    slots.forEach((s, i) => {
+      row.push(s.value(it));
+      if (s.right) alignRight.push(i + 1);
+      if (s.center) alignCenter.push(i + 1);
+    });
     push(row, { size: 10, height: 18, border: true, alignRight, alignCenter });
   }
 
   const totalRow = new Array(COLS).fill('');
   totalRow[0] = '合计';
-  totalRow[COLS - 1] = fmt(d.total_amount);
+  totalRow[SUM_AT] = fmt(d.total_amount);
   r = push(totalRow, { bold: true, size: 11, height: 22, border: true });
-  merges.push({ s: { r, c: 0 }, e: { r, c: COLS - 2 } });
+  if (SUM_AT > 1) merges.push({ s: { r, c: 0 }, e: { r, c: SUM_AT - 1 } });
   blank(4);
 
   const clause = [
@@ -97,11 +125,7 @@ function buildWorkbookAoa(d, XLSX) {
   push(['日期：', '', '', '', '联系电话：', '', '', ''], { size: 10, height: 22 });
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [
-    { wch: 6 }, { wch: 18 }, { wch: 30 },
-    ...custom.map(() => ({ wch: 14 })),
-    { wch: 8 }, { wch: 6 }, { wch: 13 }, { wch: 8 }, { wch: 15 }
-  ];
+  ws['!cols'] = [{ wch: 6 }, ...slots.map((s) => ({ wch: s.width }))];
   ws['!merges'] = merges;
 
   const border = {

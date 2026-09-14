@@ -306,11 +306,20 @@ const TPL_NAME2 = `流程测试模板B${tag}`;
       const nameOk = setField('模板名称', ${JSON.stringify(`${TPL_NAME}-界面`)});
       setField('类别', '球阀');
 
-      /* 填第一行明细 */
+      /* 填第一行明细：**按列名定位**（自定义列会插在内置列之间，按序号取会错位） */
       const tr = d.querySelector('.quo-table tbody tr');
-      const inputs = [...tr.querySelectorAll('input')];
-      const put = (i, v) => { inputs[i].value = v; inputs[i].dispatchEvent(new Event('input', { bubbles: true })); };
-      put(0, '球阀'); put(1, 'DN300'); put(2, 'Class600'); put(3, '316L'); put(4, '法兰'); put(5, '3');
+      const tds = [...tr.querySelectorAll('td')];
+      const heads = [...d.querySelectorAll('.quo-table thead th')]
+        .map(x => x.textContent.replace(/[◀▶]/g, '').trim());
+      const put = (colName, v) => {
+        const idx = heads.indexOf(colName);
+        const inp = idx >= 0 && tds[idx] ? tds[idx].querySelector('input') : null;
+        if (!inp) return;
+        inp.value = v;
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      put('名称 / 阀种', '球阀'); put('口径', 'DN300'); put('压力', 'Class600');
+      put('阀体材质', '316L'); put('连接', '法兰'); put('数量', '3');
       await new Promise(r => setTimeout(r, 400));
 
       const save = [...d.querySelectorAll('.drawer-foot button')].find(b => b.textContent.includes('保存模板'));
@@ -399,11 +408,24 @@ const TPL_NAME2 = `流程测试模板B${tag}`;
 
       const d2 = [...document.querySelectorAll('.drawer')].pop();
       const trs = [...d2.querySelectorAll('.quo-table tbody tr')];
-      const first = trs[0] ? [...trs[0].querySelectorAll('input')].map(i => i.value) : [];
+      /* 按列名取值（自定义列会插在内置列之间） */
+      const h2 = [...d2.querySelectorAll('.quo-table thead th')]
+        .map(x => x.textContent.replace(/[◀▶]/g, '').trim());
+      const cellVal = (rowIdx, colName) => {
+        const tr = trs[rowIdx];
+        if (!tr) return '(无行)';
+        const tds = [...tr.querySelectorAll('td')];
+        const idx = h2.indexOf(colName);
+        const inp = idx >= 0 && tds[idx] ? tds[idx].querySelector('input') : null;
+        return inp ? inp.value : (idx >= 0 && tds[idx] ? tds[idx].textContent.trim() : '(无此列)');
+      };
       return {
         opts,
         rowCount: trs.length,
-        firstRow: { name: first[0], size: first[1], pressure: first[2], material: first[3], qty: first[5], price: first[7] },
+        firstRow: {
+          name: cellVal(0, '名称 / 阀种'), size: cellVal(0, '口径'), pressure: cellVal(0, '压力'),
+          material: cellVal(0, '阀体材质'), qty: cellVal(0, '数量'), price: cellVal(0, '单价(元)')
+        },
         toasts: [...document.querySelectorAll('.toast')].map(t => t.textContent.trim())
       };
     })()`);
@@ -433,10 +455,16 @@ const TPL_NAME2 = `流程测试模板B${tag}`;
         return 'ok';
       };
       const trs = [...d.querySelectorAll('.quo-table tbody tr')];
+      /* 按列名找到「单价(元)」那一格再填（不能用输入框序号） */
+      const heads = [...d.querySelectorAll('.quo-table thead th')]
+        .map(x => x.textContent.replace(/[◀▶]/g, '').trim());
+      const priceIdx = heads.indexOf('单价(元)');
       trs.forEach((tr, i) => {
-        const inputs = [...tr.querySelectorAll('input')];
-        inputs[7].value = String(1000 + i * 100);   // 单价
-        inputs[7].dispatchEvent(new Event('input', { bubbles: true }));
+        const tds = [...tr.querySelectorAll('td')];
+        const inp = priceIdx >= 0 && tds[priceIdx] ? tds[priceIdx].querySelector('input') : null;
+        if (!inp) return;
+        inp.value = String(1000 + i * 100);   // 单价
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
       });
       await new Promise(r => setTimeout(r, 500));
       const total = d.querySelector('.quo-total').textContent.trim();

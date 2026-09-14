@@ -21,9 +21,36 @@ module.exports = async function quotationFieldRoutes(ctx) {
   const fail = (status, code, message) => ({ ok: false, status, code, message });
   const sub = segments[2] || '';
 
-  /* 列表 */
+  /* 列表（含内置列定义与全局列顺序） */
   if (!sub && method === 'GET') {
     return ok(fieldsvc.listFields(db, { enabledOnly: query.enabled === '1' }));
+  }
+
+  /* 列顺序：整体保存（列管理一次性排好时用） */
+  if (sub === 'order' && (method === 'POST' || method === 'PUT')) {
+    try {
+      return ok({ order: fieldsvc.saveOrder(db, (body || {}).order) });
+    } catch (e) {
+      return fail(e.status || 400, e.code || 'SAVE_FAILED', e.message);
+    }
+  }
+
+  /* 列顺序：整体读取 */
+  if (sub === 'order' && method === 'GET') {
+    return ok({ order: fieldsvc.resolveOrder(db) });
+  }
+
+  /* 移动某一列（内置列与自定义列通用）：{ key: 'item_name' | 'f:12', dir: 'left'|'right'｜'up'|'down' } */
+  if (sub === 'move' && method === 'POST') {
+    const key = String((body && body.key) || '');
+    const dir = String((body && body.dir) || '');
+    if (!key) return fail(400, 'KEY_REQUIRED', '请指定要移动的列');
+    const d = (dir === 'up' || dir === 'left') ? 'up' : 'down';
+    try {
+      return ok(fieldsvc.moveColumn(db, key, d));
+    } catch (e) {
+      return fail(e.status || 400, e.code || 'MOVE_FAILED', e.message);
+    }
   }
 
   /* 新增 */
@@ -57,7 +84,7 @@ module.exports = async function quotationFieldRoutes(ctx) {
     }
   }
 
-  /* 排序 */
+  /* 排序（兼容旧调用：按列 id 在全局列序里前后移动） */
   if (id && action === 'move' && method === 'POST') {
     const dir = (body && body.dir) === 'up' ? 'up' : 'down';
     try {

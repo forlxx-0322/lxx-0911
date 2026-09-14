@@ -2113,6 +2113,19 @@ body {
 /* 明细表头里的单位后缀，比列名淡一点 */
 .quo-th-unit { color: var(--c-text-3); font-weight: 400; font-size: var(--fs-xs); }
 
+/* 表头里的「移动这一列」按钮：平时淡、指向表头才明显，避免表头太吵 */
+.quo-th {
+  display: flex; align-items: center; justify-content: space-between; gap: 4px;
+}
+.quo-th-label { flex: 1; min-width: 0; }
+.col-move { display: inline-flex; gap: 0; opacity: .3; transition: opacity .15s; }
+.quo-table th:hover .col-move { opacity: 1; }
+.col-move .icon-btn {
+  padding: 0 2px; font-size: 9px; line-height: 1.4; color: var(--c-text-3);
+}
+.col-move .icon-btn:hover:not(:disabled) { color: var(--c-primary); }
+.col-move .icon-btn:disabled { opacity: .25; }
+
 /* 「列管理」抽屉：常用列一键添加 */
 .qf-presets .qf-chips {
   display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px;
@@ -2143,3 +2156,6 @@ body {
 /* 现有列列表：输入框贴着单元格，看起来像可直接改 */
 .qf-table td { vertical-align: middle; }
 .qf-table .input-sm { width: 100%; }
+/* 内置列在列管理里的样子：名字 + 标签，不可改名/删除，但可以移动 */
+.qf-builtin { font-weight: 600; }
+.qf-tag { margin-left: 6px; font-size: var(--fs-xxs, 11px); }

@@ -1,16 +1,17 @@
 /**
  * 报价自定义列 —— 预设清单 + 全局「列管理」抽屉 + 共享缓存
  *
- * 背景：阀门报价的规格项因客户而异（介质、设计压力、设计温度、操作压力、操作温度、
- * 环境温度、泄露等级、阀门标准、执行器型号、定位器、电磁阀、限位开关、过滤减压阀、
- * 气控阀……），固定列永远不够用，所以做成**列由使用者自己加**：
+ * 两件事：
+ *   1. **自定义列**：介质、设计压力、设计温度、操作压力、操作温度、环境温度、泄露等级、
+ *      阀门标准、执行器型号、定位器、电磁阀、限位开关、过滤减压阀、气控阀……列数不封顶
+ *   2. **列顺序**：内置列与自定义列**全部可以移动位置**（全局一套顺序，
+ *      报价单明细、报价模板明细、导出的 Excel 单据三处共用）
  *
- *   - 列定义存在服务端（`quotation_fields`），报价单与报价模板**共用同一套列**
- *   - 明细行的值存在各自的 `extra` 里，键是**列 id**
- *     → 所以**改名不丢值**（「泄露等级」改成「泄漏等级」，历史报价照样显示）
- *   - 删列只是不再显示，已经填过的值仍留在明细里（界面会提示影响了几张报价单）
+ * 列定义与顺序都存在服务端（顺序放在设置项 `quotation_column_order` 里），
+ * 所以换浏览器、换机器打开，看到的表格布局是一样的。
  *
- * 管理抽屉做成**全局单例**（挂在应用根节点），这样它不会嵌在报价单抽屉里，
+ * 明细行的值存在各自的 `extra` 里，键是**列 id** —— 所以**改名不丢值**。
+ * 管理抽屉做成**全局单例**（挂在应用根节点），不会嵌在报价单抽屉里，
  * 任何页面都只要调用 CRM.quotationFields.open()。
  */
 'use strict';
@@ -38,11 +39,16 @@ window.CRM = window.CRM || {};
     { name: '气控阀', kind: 'text' }
   ];
 
+  /** 只属于报价单的内置列（模板不含价格；列管理里会标注出来） */
+  const QUOTATION_ONLY = { unit_price: 1, discount: 1, subtotal: 1 };
+
   const state = reactive({
     open: false,
     loading: false,
     loaded: false,
-    list: [],        // 全部未删除的列（含停用）
+    list: [],        // 自定义列（含停用）
+    columns: [],     // 全部列，按全局列顺序
+    order: [],       // 列顺序（key 数组）
     kinds: ['text', 'number', 'select'],
     limits: { maxFields: 60, nameMax: 20 }
   });
@@ -52,7 +58,7 @@ window.CRM = window.CRM || {};
   /** 列发生变化时通知订阅者（报价单抽屉、模板页靠它刷新表头） */
   function emitChange() {
     for (const fn of listeners) {
-      try { fn(enabledFields()); } catch (_) { /* 单个订阅者出错不影响其它 */ }
+      try { fn(columnsFor('quotation')); } catch (_) { /* 单个订阅者出错不影响其它 */ }
     }
   }
 
@@ -64,7 +70,19 @@ window.CRM = window.CRM || {};
     };
   }
 
-  /** 界面上要显示的列 = 启用且未删除 */
+  /**
+   * 某张表要显示的列（按全局列顺序）。
+   * @param {string} [scope] 'quotation' | 'template' | 空（空 = 全部列，列管理用）
+   */
+  function columnsFor(scope) {
+    return state.columns.filter((c) => {
+      if (c.type === 'custom') return !!c.enabled || !scope;   // 停用的列：表格不显示，列管理里仍列出
+      if (!scope) return true;
+      return !QUOTATION_ONLY[c.key] || scope === 'quotation';
+    });
+  }
+
+  /** 界面上要显示的自定义列（兼容旧调用） */
   function enabledFields() {
     return state.list.filter((f) => f.enabled);
   }
@@ -75,6 +93,11 @@ window.CRM = window.CRM || {};
     try {
       const r = await CRM.api.listQuotationFields();
       state.list = r.list || [];
+      state.order = r.order || [];
+      /* 把自定义列的"可编辑行"挂到列视图上：列管理里改的就是同一批对象 */
+      state.columns = (r.columns || []).map((c) => (c.type === 'custom'
+        ? Object.assign({}, c, { row: state.list.find((f) => f.id === c.id) })
+        : c));
       state.kinds = r.kinds || state.kinds;
       state.limits = r.limits || state.limits;
       state.loaded = true;
@@ -90,6 +113,14 @@ window.CRM = window.CRM || {};
   }
 
   function close() { state.open = false; }
+
+  /** 移动一列（内置列也能移） */
+  async function moveColumn(key, dir) {
+    const r = await CRM.api.moveQuotationColumn(key, dir);
+    await load(true);
+    emitChange();
+    return r;
+  }
 
   /* ------------------------------------------------------------------ */
   /* 列管理抽屉                                                          */
@@ -114,7 +145,8 @@ window.CRM = window.CRM || {};
         const have = new Set(this.st.list.map((f) => String(f.name).trim()));
         return this.presets.filter((p) => !have.has(p.name));
       },
-      enabledCount() { return this.st.list.filter((f) => f.enabled).length; }
+      enabledCount() { return this.st.list.filter((f) => f.enabled).length; },
+      tableColumns() { return columnsFor('quotation').length; }
     },
     methods: {
       close() { close(); },
@@ -130,7 +162,7 @@ window.CRM = window.CRM || {};
         try {
           await CRM.api.saveQuotationField(payload);
           await this.refresh();
-          CRM.toast(`已添加列「${payload.name}」`, 'success');
+          CRM.toast(`已添加列「${payload.name}」，可用 ↑↓ 或表头上的 ◀ ▶ 挪位置`, 'success', 5000);
           return true;
         } catch (e) {
           CRM.toast(e.message || '添加失败', 'error');
@@ -161,8 +193,10 @@ window.CRM = window.CRM || {};
         }
       },
 
-      /** 行内改完（失焦/回车）即保存 */
-      async saveRow(row) {
+      /** 自定义列行内改完（失焦/回车）即保存 */
+      async saveRow(col) {
+        const row = col.row;
+        if (!row) return;
         try {
           await CRM.api.saveQuotationField({
             id: row.id,
@@ -180,22 +214,26 @@ window.CRM = window.CRM || {};
         }
       },
 
-      async toggle(row) {
-        row.enabled = row.enabled ? 0 : 1;
-        await this.saveRow(row);
+      async toggle(col) {
+        if (!col.row) return;
+        col.row.enabled = col.row.enabled ? 0 : 1;
+        await this.saveRow(col);
       },
 
-      async move(row, dir) {
+      /** ↑↓ 与表头上的 ◀ ▶ 是同一件事：在全局列顺序里前后挪一位 */
+      async move(col, dir) {
         try {
-          const r = await CRM.api.moveQuotationField(row.id, dir);
-          if (!r.moved) { CRM.toast(r.message, 'info'); return; }
-          await this.refresh();
+          await moveColumn(col.key, dir);
         } catch (e) {
           CRM.toast(e.message || '调整顺序失败', 'error');
         }
       },
 
-      async remove(row) {
+      isQuotationOnly(col) { return !!QUOTATION_ONLY[col.key]; },
+
+      async remove(col) {
+        const row = col.row;
+        if (!row) return;
         const ok = await CRM.confirm({
           title: '删除自定义列',
           message: `确定删除列「${row.name}」吗？<br><br>`
@@ -219,18 +257,20 @@ window.CRM = window.CRM || {};
     },
     template: `
       <c-drawer :model-value="st.open" title="报价自定义列"
-                sub="这些列会同时出现在报价单明细与报价模板明细里；列数不封顶，随时可加"
-                width="980px"
+                sub="列名自己定、列数不封顶；所有列都能移动位置（报价单与报价模板共用同一套列与列序）"
+                width="1020px"
                 @update:model-value="close">
 
         <div class="note">
           <c-icon name="alert" :size="15" />
           <div style="font-size:var(--fs-xs)">
-            报价时按客户要求填的规格项（介质、设计温度、泄露等级、执行器型号……）
-            都可以加成列。<br>
-            <strong>改列名不会丢数据</strong>：历史报价单里的值跟着新列名一起显示；
-            <strong>删列也不会删值</strong>，只是不再显示。当前启用 <strong>{{ enabledCount }}</strong> 列，
-            最多 {{ st.limits.maxFields }} 列。
+            报价时按客户要求填的规格项都可以加成列；
+            <strong>改列名不会丢数据</strong>（历史报价单里的值跟着新列名显示），
+            <strong>删列也不会删值</strong>（只是不再显示）。<br>
+            <strong>列顺序是全局的</strong>：在这里（或直接在表头上点 ◀ ▶）排好，
+            报价单明细、报价模板明细、导出的 Excel 单据三处一致。
+            当前启用 <strong>{{ enabledCount }}</strong> 个自定义列，
+            报价单表格共 <strong>{{ tableColumns }}</strong> 列（含内置列），自定义列最多 {{ st.limits.maxFields }} 个。
           </div>
         </div>
 
@@ -266,54 +306,70 @@ window.CRM = window.CRM || {};
           </div>
         </div>
 
-        <!-- 现有列 -->
+        <!-- 全部列（内置 + 自定义），按当前列顺序 -->
         <div v-if="st.loading" class="muted mt-4">加载中…</div>
-        <c-empty v-else-if="!st.list.length" icon="file" class="mt-4"
-                 title="还没有自定义列"
+        <c-empty v-else-if="!st.columns.length" icon="file" class="mt-4"
+                 title="还没有可显示的列"
                  desc="点上面的常用列，或在「新增一列」里填一个列名" />
         <div v-else class="table-wrap mt-4">
           <table class="data-table qf-table">
             <thead>
               <tr>
-                <th style="width:52px">排序</th>
-                <th style="width:170px">列名</th>
-                <th style="width:120px">类型</th>
-                <th style="width:100px">单位</th>
+                <th style="width:56px">顺序</th>
+                <th style="width:180px">列名</th>
+                <th style="width:110px">类型</th>
+                <th style="width:92px">单位</th>
                 <th>候选值（下拉类型用）</th>
                 <th style="width:96px">启用</th>
                 <th style="width:70px">操作</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(f, i) in st.list" :key="f.id" :class="{ muted: !f.enabled }">
+              <tr v-for="(c, i) in st.columns" :key="c.key"
+                  :class="{ muted: c.type === 'custom' && !c.enabled }">
                 <td>
                   <div class="tpl-sort">
-                    <button class="icon-btn" title="上移" :disabled="i === 0" @click="move(f, 'up')">↑</button>
-                    <button class="icon-btn" title="下移" :disabled="i === st.list.length - 1" @click="move(f, 'down')">↓</button>
+                    <button class="icon-btn" title="上移一位" :disabled="i === 0" @click="move(c, 'up')">↑</button>
+                    <button class="icon-btn" title="下移一位" :disabled="i === st.columns.length - 1"
+                            @click="move(c, 'down')">↓</button>
                   </div>
                 </td>
                 <td>
-                  <input class="input input-sm" v-model="f.name" @change="saveRow(f)" />
+                  <template v-if="c.type === 'builtin'">
+                    <span class="qf-builtin">{{ c.label }}</span>
+                    <span class="tag muted qf-tag">内置</span>
+                    <span v-if="isQuotationOnly(c)" class="tag muted qf-tag">仅报价单</span>
+                  </template>
+                  <input v-else class="input input-sm" v-model="c.row.name" @change="saveRow(c)" />
                 </td>
                 <td>
-                  <select class="input input-sm" v-model="f.kind" @change="saveRow(f)">
+                  <select v-if="c.type === 'custom'" class="input input-sm" v-model="c.row.kind" @change="saveRow(c)">
                     <option value="text">文本</option>
                     <option value="number">数字</option>
                     <option value="select">下拉候选</option>
                   </select>
+                  <span v-else class="muted" style="font-size:var(--fs-xs)">
+                    {{ c.kind === 'computed' ? '自动算' : (c.kind === 'number' ? '数字' : '文本') }}
+                  </span>
                 </td>
-                <td><input class="input input-sm" v-model="f.unit" @change="saveRow(f)" /></td>
                 <td>
-                  <input v-if="f.kind === 'select'" class="input input-sm" v-model="f.options"
-                         placeholder="用逗号分隔" @change="saveRow(f)" />
+                  <input v-if="c.type === 'custom'" class="input input-sm" v-model="c.row.unit" @change="saveRow(c)" />
                   <span v-else class="muted" style="font-size:var(--fs-xs)">—</span>
                 </td>
                 <td>
-                  <span class="tag" :class="f.enabled ? 'success' : 'muted'" style="cursor:pointer"
-                        @click="toggle(f)">{{ f.enabled ? '启用' : '停用' }}</span>
+                  <input v-if="c.type === 'custom' && c.row.kind === 'select'" class="input input-sm"
+                         v-model="c.row.options" placeholder="用逗号分隔" @change="saveRow(c)" />
+                  <span v-else class="muted" style="font-size:var(--fs-xs)">—</span>
                 </td>
                 <td>
-                  <button class="icon-btn danger" title="删除这一列" @click="remove(f)">✕</button>
+                  <span v-if="c.type === 'custom'" class="tag" :class="c.enabled ? 'success' : 'muted'"
+                        style="cursor:pointer" @click="toggle(c)">{{ c.enabled ? '启用' : '停用' }}</span>
+                  <span v-else class="tag muted">固定</span>
+                </td>
+                <td>
+                  <button v-if="c.type === 'custom'" class="icon-btn danger" title="删除这一列"
+                          @click="remove(c)">✕</button>
+                  <span v-else class="muted" style="font-size:var(--fs-xs)">—</span>
                 </td>
               </tr>
             </tbody>
@@ -334,6 +390,8 @@ window.CRM = window.CRM || {};
     close,
     onChange,
     enabled: enabledFields,
+    columnsFor,
+    moveColumn,
     Manager: FieldsManager,
     register(app) { app.component('c-quotation-fields', FieldsManager); }
   };

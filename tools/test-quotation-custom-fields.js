@@ -109,6 +109,8 @@ const USER_COLUMNS = [
   const db = new DatabaseSync(path.join(ROOT, 'data', 'crm.db'));
   const created = { customer: null, project: null, quotations: [], templates: [], fields: [] };
   let cdp = null, child = null, profile = null;
+  /* 套件开跑时的列顺序（本套件会加很多临时列，跑完要把顺序也还原干净） */
+  const orderAtStart = (await api('GET', '/api/quotation-fields/order')).data.order;
 
   const dropFields = () => {
     try {
@@ -211,18 +213,33 @@ const USER_COLUMNS = [
       tooLong.status === 400 && tooLong.code === 'NAME_TOO_LONG' && /20/.test(tooLong.message || ''),
       `${tooLong.status} ${tooLong.code}：${tooLong.message}`);
 
-    /* 排序 */
+    /* 排序：现在调的是**全局列顺序**（内置列与自定义列同一套），不再是列自己的 sort */
     const firstId = builtIds[0];
+    const key0 = 'f:' + firstId;
+    const orderBefore = (await api('GET', '/api/quotation-fields/order')).data.order;
     const mvDown = await api('POST', `/api/quotation-fields/${firstId}/move`, { dir: 'down' });
-    const l2 = await api('GET', '/api/quotation-fields');
-    const mine2 = l2.data.list.filter((f) => String(f.name).startsWith(P));
-    check('接口：列顺序可调整（下移生效）',
-      mvDown.data.moved === true && mine2[1] && mine2[1].id === firstId,
-      mine2.map((f) => f.name.replace(P, '')).slice(0, 4).join('、'));
+    const orderAfter = mvDown.data.order;
+    check('接口：自定义列可在全局列序里下移一位',
+      mvDown.data.moved === true && orderAfter.indexOf(key0) === orderBefore.indexOf(key0) + 1,
+      `位置 ${orderBefore.indexOf(key0)} → ${orderAfter.indexOf(key0)}`);
 
-    const mvTop = await api('POST', `/api/quotation-fields/${mine2[0].id}/move`, { dir: 'up' });
-    check('接口：已在最前时上移给出提示而不是静默失败',
+    /* 一路左移到第一位：证明自定义列可以越过内置列（"所有列一视同仁"） */
+    let orderUp = mvDown.data.order;
+    let guard = 0;
+    while (guard++ < 80) {
+      const r = await api('POST', '/api/quotation-fields/move', { key: key0, dir: 'up' });
+      if (!r.data.moved) break;
+      orderUp = r.data.order;
+    }
+    check('接口：自定义列可以一路移到内置列前面（所有列一视同仁）',
+      orderUp[0] === key0 && orderUp.indexOf(key0) < orderUp.indexOf('connection_type'),
+      `自定义列位置 ${orderUp.indexOf(key0)}，连接列位置 ${orderUp.indexOf('connection_type')}`);
+
+    const mvTop = await api('POST', '/api/quotation-fields/move', { key: key0, dir: 'up' });
+    check('接口：第一列再往前会给出「已经在最前面」提示而不是静默失败',
       mvTop.data.moved === false && /最前/.test(mvTop.data.message || ''), mvTop.data.message);
+    /* 把列序恢复成本段测试开始前的样子，免得影响后面的断言 */
+    await api('POST', '/api/quotation-fields/order', { order: orderBefore });
 
     /* 改名 + 停用 */
     const rename = await api('PUT', `/api/quotation-fields/${leak.id}`, { name: `${P}泄漏等级` });
@@ -457,25 +474,30 @@ const USER_COLUMNS = [
       const head = rows.find((r) => r[0] === '序号') || [];
       const rowIdx = rows.findIndex((r) => r[0] === '序号');
       const firstData = rows[rowIdx + 1] || [];
-      const customHead = head.slice(3, Math.max(3, head.length - 5));
-      const customCells = firstData.slice(3, Math.max(3, firstData.length - 5));
+      const headNames = head.map(String);
+      /* 单据列按**全局列顺序**排，自定义列可能夹在内置列之间，
+         所以按列名定位，而不是假定它们连在某一列后面 */
+      const customLabels = (bigExp.data.custom_columns || []).map((c) => (c.unit ? `${c.name}（${c.unit}）` : c.name));
+      const idxs = customLabels.map((l) => headNames.indexOf(l));
+      const customCells = idxs.map((i) => (i > 0 ? firstData[i] : undefined));
+      const sumIdx = headNames.indexOf('小计(元)');
       /* 注意期望是 39 而不是 40：上面测过「删除列」，「气控阀」那一列已删，
          它的值在保存时被自然清理，所以单据里只应出现剩下 39 列 */
       check('导出：真出一份 xlsx 并能读回，单据表头包含全部自定义列',
-        customHead.length === 39 && customHead[0] === `${P}设计压力（MPa）` && customHead.includes(`${P}批量列26`)
-        && !customHead.some((h) => h.includes('气控阀')),
-        `表头共 ${head.length} 列，自定义列 ${customHead.length} 个：${customHead.slice(0, 3).join(' / ')}…`);
+        customLabels.length === 39 && idxs.every((i) => i > 0)
+        && !headNames.some((h) => h.includes('气控阀')),
+        `表头共 ${headNames.length} 列，自定义列 ${customLabels.length} 个：${customLabels.slice(0, 3).join(' / ')}…`);
       check('导出：xlsx 明细行里的自定义列值正确落格（39 个值一个不少）',
         customCells.length === 39 && new Set(customCells).size === 39
         && customCells.every((v) => /^R1C\d+$/.test(String(v)))
-        && firstData[firstData.length - 1] === '100.00',
-        `自定义列 ${customCells.length} 格，首格 ${customCells[0]}，小计 ${firstData[firstData.length - 1]}`);
+        && firstData[sumIdx] === '100.00',
+        `自定义列 ${customCells.length} 格，首格 ${customCells[0]}，小计 ${firstData[sumIdx]}`);
       /* 列宽要按 xlsx 内部 XML 判断（SheetJS 读回时不还原 !cols） */
       const { readXlsxParts } = require('./.fixtures/xlsx-inspect');
       const parts = readXlsxParts(buf);
       check('导出：xlsx 列宽随自定义列数量扩展',
-        parts.hasCols && parts.colWidths.length === head.length,
-        `列宽定义 ${parts.colWidths.length} 项（表头 ${head.length} 列）`);
+        parts.hasCols && parts.colWidths.length === headNames.length,
+        `列宽定义 ${parts.colWidths.length} 项（表头 ${headNames.length} 列）`);
     }
 
     /* ================= F. 浏览器：报价单抽屉 ================= */
@@ -537,14 +559,28 @@ const USER_COLUMNS = [
         const chips = [...mgr.querySelectorAll('.qf-chip')].map(x => x.textContent.trim());
         const rows = [...mgr.querySelectorAll('.qf-table tbody tr')].length;
         const hasAdd = !!mgr.querySelector('.qf-add-row input');
-        return { title: (mgr.querySelector('.drawer-title') || {}).textContent || '', chips, rows, hasAdd };
+        const text = mgr.innerText;
+        return {
+          title: (mgr.querySelector('.drawer-title') || {}).textContent || '',
+          chips, rows, hasAdd,
+          mentionsOrder: /列顺序/.test(text),
+          hasBuiltinTag: /内置/.test(text)
+        };
       })()`);
-      check('浏览器：列管理抽屉能打开，并列出使用者点名的常用列',
-        manager.title.includes('自定义列') && manager.chips.length >= 10
-        && manager.chips.some((c) => c.includes('介质')) && manager.chips.some((c) => c.includes('泄露等级')),
-        `${manager.title}；快捷列 ${manager.chips.length} 个`);
-      check('浏览器：列管理里能看到已有列并提供「新增一列」',
-        manager.rows >= 15 && manager.hasAdd === true, `已有 ${manager.rows} 行，新增区存在=${manager.hasAdd}`);
+      /* 常用列区只列「还没添加过」的预设：使用者若已把预设都加过，这里就该是空的
+         （点了也只会多出一列同名重复列，所以干脆不提示） */
+      const PRESET_NAMES = ['介质', '设计压力', '设计温度', '操作压力', '操作温度', '环境温度',
+        '泄露等级', '阀门标准', '执行器型号', '定位器', '电磁阀', '限位开关', '过滤减压阀', '气控阀'];
+      const allNames = ((await api('GET', '/api/quotation-fields')).data.list || []).map((f) => f.name);
+      const expectLeft = PRESET_NAMES.filter((n) => !allNames.includes(n)).map((n) => n.replace(P, '')).length;
+      check('浏览器：列管理抽屉能打开，常用列区只列还没添加过的预设（不重复提示）',
+        manager.title.includes('自定义列') && (manager.chips || []).length === expectLeft,
+        `${manager.title}；快捷列 ${(manager.chips || []).length} 个（应为 ${expectLeft} 个）`);
+      check('浏览器：列管理里能看到已有列、提供「新增一列」，并说明了列顺序',
+        manager.rows >= 15 && manager.hasAdd === true && manager.mentionsOrder === true,
+        `已有 ${manager.rows} 行，新增区=${manager.hasAdd}，说明列顺序=${manager.mentionsOrder}`);
+      check('浏览器：列管理里内置列带「内置」标注（可移动但不可改名/删除）',
+        manager.hasBuiltinTag === true, `内置标注=${manager.hasBuiltinTag}`);
 
       /* 在列管理里新增一列，明细表头应即时出现 */
       const UI_COL = `${P}UI新增列`;
@@ -583,16 +619,21 @@ const USER_COLUMNS = [
         await new Promise(r => setTimeout(r, 1200));
 
         const d = [...document.querySelectorAll('.drawer')].pop();
-        const heads = [...d.querySelectorAll('.quo-table thead th')].map(x => x.textContent.trim());
+        /* 表头里还带着移动按钮的 ◀ ▶ 字符，比对列名时要先去掉 */
+        const heads = [...d.querySelectorAll('.quo-table thead th')]
+          .map(x => x.textContent.replace(/[◀▶]/g, '').trim());
         const colIdx = heads.findIndex(h => h.includes(${JSON.stringify(UI_COL)}));
         if (colIdx < 0) return { err: '明细表头里没有刚新增的列' };
         const tr = d.querySelector('.quo-table tbody tr');
+        const tds = [...tr.querySelectorAll('td')];
+        if (tds.length !== heads.length) return { err: '表头与单元格数量对不上', heads: heads.length, tds: tds.length };
         const setVal = (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
         setVal(tr.querySelectorAll('input')[0], '界面录入球阀');
-        const cell = tr.querySelectorAll('td')[colIdx].querySelector('input');
+        const cell = tds[colIdx].querySelector('input');
+        if (!cell) return { err: '这一列没有输入框', colIdx };
         setVal(cell, '界面填的值');
-        setVal(tr.querySelectorAll('td')[heads.indexOf('数量')].querySelector('input'), '3');
-        setVal(tr.querySelectorAll('td')[heads.indexOf('单价(元)')].querySelector('input'), '1500');
+        setVal(tds[heads.indexOf('数量')].querySelector('input'), '3');
+        setVal(tds[heads.indexOf('单价(元)')].querySelector('input'), '1500');
         await new Promise(r => setTimeout(r, 400));
 
         const save = [...d.querySelectorAll('.drawer-foot button')].find(x => x.textContent.includes('保存报价单'));
@@ -731,6 +772,11 @@ const USER_COLUMNS = [
       db.prepare('DELETE FROM quotation_templates WHERE name LIKE ?').run(`%【列测试%`);
     } catch (_) { /* 忽略 */ }
     dropFields();
+    /* 临时列删掉后，列顺序数组里还会留着它们的 key —— 用套件开跑时的顺序再存一次，
+       免得把死 key 留在使用者的设置项里（读取时虽然会过滤，但存着不干净） */
+    try {
+      await api('POST', '/api/quotation-fields/order', { order: orderAtStart });
+    } catch (_) { /* 忽略 */ }
     try {
       if (created.project) {
         db.prepare('DELETE FROM payments WHERE project_id = ?').run(created.project);
@@ -752,9 +798,17 @@ const USER_COLUMNS = [
     const leftQuo = created.project
       ? db.prepare('SELECT COUNT(*) AS n FROM quotations WHERE project_id = ?').get(created.project).n : 0;
     const leftTpl = db.prepare('SELECT COUNT(*) AS n FROM quotation_templates WHERE name LIKE ?').get('%【列测试%').n;
+    const orderBack = (await api('GET', '/api/quotation-fields/order').catch(() => ({ data: {} }))).data.order || [];
+    const storedOrder = db.prepare("SELECT value FROM settings WHERE key = 'quotation_column_order'").get();
+    const deadKeys = storedOrder ? JSON.parse(storedOrder.value).filter((k) => k.startsWith('f:')
+      && !db.prepare('SELECT 1 AS x FROM quotation_fields WHERE id = ? AND deleted_at IS NULL').get(Number(k.slice(2))))
+      : [];
     check('本套件测试数据与自定义列已全部清理',
       leftFields === 0 && leftCust === 0 && leftProj === 0 && leftQuo === 0 && leftTpl === 0,
       `残留：列 ${leftFields}、客户 ${leftCust}、项目 ${leftProj}、报价单 ${leftQuo}、模板 ${leftTpl}`);
+    check('列顺序已还原，且设置项里不残留临时列的 key',
+      JSON.stringify(orderBack) === JSON.stringify(orderAtStart) && deadKeys.length === 0,
+      `顺序 ${orderBack.length} 项（原 ${orderAtStart.length} 项），死 key ${deadKeys.length} 个`);
     db.close();
   }
 

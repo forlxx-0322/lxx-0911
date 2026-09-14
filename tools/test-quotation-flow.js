@@ -313,21 +313,25 @@ const tag = Date.now().toString().slice(-6);
       await new Promise(r => setTimeout(r, 400));
       const rowsAfterAdd = d.querySelectorAll('.quo-table tbody tr').length;
 
-      /* 填第一行。列索引以实际 DOM 为准：
-         [0]名称 [1]口径 [2]压力 [3]材质 [4]连接 [5]数量 [6]单位 [7]单价 [8]折扣% [9]交期 [10]备注 */
-      const setCell = (rowIdx, colIdx, val) => {
+      /* 填第一行。**按列名定位**（自定义列会插在内置列之间，
+         按输入框序号取会错位——使用者的库里可能已经有一堆自定义列） */
+      const heads = [...d.querySelectorAll('.quo-table thead th')]
+        .map(x => x.textContent.replace(/[◀▶]/g, '').trim());
+      const setCell = (rowIdx, colName, val) => {
         const tr = d.querySelectorAll('.quo-table tbody tr')[rowIdx];
-        const inputs = tr.querySelectorAll('input');
-        const inp = inputs[colIdx];
+        if (!tr) return;
+        const tds = [...tr.querySelectorAll('td')];
+        const idx = heads.indexOf(colName);
+        const inp = idx >= 0 && tds[idx] ? tds[idx].querySelector('input') : null;
         if (!inp) return;
         inp.value = val;
         inp.dispatchEvent(new Event('input', { bubbles: true }));
       };
-      setCell(0, 0, '球阀');
-      setCell(0, 1, 'DN50');
-      setCell(0, 5, '10');      // 数量
-      setCell(0, 7, '1000');    // 单价
-      setCell(0, 8, '10');      // 折扣%
+      setCell(0, '名称 / 阀种', '球阀');
+      setCell(0, '口径', 'DN50');
+      setCell(0, '数量', '10');
+      setCell(0, '单价(元)', '1000');
+      setCell(0, '折扣%', '10');
       await new Promise(r => setTimeout(r, 600));
 
       const sub = d.querySelector('.quo-table tbody tr .quo-sub').textContent.trim();

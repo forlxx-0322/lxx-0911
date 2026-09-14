@@ -505,6 +505,8 @@ function exportData(db, id, settings) {
     project_name: q.project_name || '',
     total_amount: money(q.total_amount),
     custom_columns: custom,
+    /* 全局列顺序：前端排版单据时按它决定"哪一列在前" */
+    column_order: fieldsvc.resolveOrder(db),
     items: items.map((it) => ({
       seq: it.seq,
       item_name: it.item_name,

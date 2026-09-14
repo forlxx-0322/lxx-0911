@@ -57,6 +57,8 @@ const SUITES = [
   ['报价模板全流程', 'tools/test-quotation-template-flow.js'],
   /* 1.15 报价自定义列 */
   ['报价自定义列全流程', 'tools/test-quotation-custom-fields.js'],
+  /* 1.16 报价明细列顺序（所有列可移动，全局一套） */
+  ['报价明细列顺序', 'tools/test-quotation-column-order.js'],
   /* 招标采集模块：不联网，用本地模拟 IMAP 服务器跑真实协议 */
   ['招标采集 · MIME 解析', 'tools/test-collect-mail.js'],
   ['招标采集 · IMAP 客户端', 'tools/test-collect-imap.js'],

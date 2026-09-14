@@ -9,9 +9,21 @@ data/
 *.db-wal
 *.db-shm
 
-# ---------- 测试与截图产物 ----------
-.fixtures/
-.shots/
+# ---------- 测试产物 ----------
+# 仓库根的 .fixtures/ 是各套件跑出来的日志、结果 JSON 与截图，
+# 其中 data 快照类文件可能含真实客户资料，绝不提交。
+# 注意用 /.fixtures/* 而不是 .fixtures/：后者会连 tools/.fixtures/ 一起忽略。
+/.fixtures/*
+!/.fixtures/mock-imap.js
+/.shots/
+
+# tools/.fixtures/ 放的是**手工维护**的测试夹带（模拟 SMTP 服务器、xlsx 解析器），
+# 缺了它们新克隆的仓库跑不了测试，所以逐个放行。
+# 其中的自签证书不入库：mock-smtp.js 检测不到会自己生成（openssl 或 Node crypto）。
+tools/.fixtures/*
+!tools/.fixtures/mock-smtp.js
+!tools/.fixtures/xlsx-inspect.js
+!tools/.fixtures/quotation-export.js
 
 # ---------- 工具运行目录（非本项目内容）----------
 .npm-cache/
@@ -29,6 +41,3 @@ desktop.ini
 *.log
 *.tmp
 *.bak
-
-# 例外：桌面上那几份验收报告是要提交的（见下），
-# 但 .fixtures 下的 log 属于测试输出，保持忽略。

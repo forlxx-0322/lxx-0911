@@ -1,4 +1,4 @@
-﻿/**
+/**
  * HTTP 服务 —— 客户管理系统
  *
  * 零依赖：仅使用 Node 内置模块（http / fs / path / url）。
@@ -44,7 +44,7 @@ const RUN_FILE = path.join(DATA_DIR, '.run.json');
 /** 本软件的标识串 —— 用于单实例判定时确认"这是我们自己的服务" */
 const APP_SIGNATURE = 'crm-bjxt/1';
 /** 应用版本号：每次功能修改或 Bug 修复后递增，并在 CHANGELOG.md 归档 */
-const APP_VERSION = '1.13';
+const APP_VERSION = '1.14';
 /** 扫描端口的范围：服务端从 CRM_PORT 起向后扫描这么多端口（启动器不再预检端口） */
 const PORT_SCAN_RANGE = 11;
 

@@ -1,9 +1,9 @@
-﻿# 客户管理系统（阀门行业版）
+# 客户管理系统（阀门行业版）
 
 面向阀门销售的个人客户与项目管理软件。**单机运行、无需登录、数据全部留在本机**，
 双击 `启动.bat` 即用。
 
-当前版本 **1.13** · 详见 [CHANGELOG.md](CHANGELOG.md)
+当前版本 **1.14** · 详见 [CHANGELOG.md](CHANGELOG.md) · 文档索引见 [docs/README.md](docs/README.md)
 
 ---
 
@@ -83,8 +83,9 @@
 ├─ server/            后端（零依赖）
 │  ├─ server.js         服务入口、路由分发、静态文件
 │  ├─ db.js             建表、结构版本与迁移
-│  ├─ services/         客户、项目、回款、待办、备份、Excel、附件
+│  ├─ services/         客户、项目、回款、待办、报价单、提醒、备份、Excel、附件
 │  ├─ collect/          招标采集（IMAP 客户端、MIME 解析、信息抽取、引擎）
+│  ├─ notify/           邮件提醒（手写 SMTP 客户端）
 │  ├─ map/              地图数据与坐标转换
 │  └─ routes/           各模块接口路由
 ├─ web/               前端（全部本地文件）
@@ -92,10 +93,26 @@
 │  ├─ css/app.css
 │  ├─ js/               页面、组件、主题、路由
 │  └─ vendor/           Vue / ECharts / SheetJS
-├─ tools/             开发与测试工具（截图、造数据、验收测试等）
+├─ tools/             开发与测试工具（验收测试、造数据、截图、排查脚本）
+│  └─ .fixtures/        手工维护的测试夹带（模拟 SMTP/IMAP 服务器、xlsx 解析器）
+├─ docs/              文档
+│  ├─ README.md         文档索引
+│  ├─ 方案/             实施方案、后续功能技术方案、专项方案
+│  └─ 验收报告/         阶段一 ~ 阶段七验收测试报告（交付证据）
 ├─ data/              运行数据（数据库 / 附件 / 备份）—— 不纳入版本管理
 └─ CHANGELOG.md       变更记录
 ```
+
+## 文档
+
+| 想知道什么 | 看哪份 |
+|---|---|
+| 软件怎么用 | 本文件 |
+| 每个版本改了什么、为什么改 | [CHANGELOG.md](CHANGELOG.md) |
+| 需求、字段字典、验收标准 | [docs/方案/客户管理系统_实施方案.md](docs/方案/客户管理系统_实施方案.md) |
+| **下一版做什么、怎么做** | [docs/方案/后续功能_技术方案.md](docs/方案/后续功能_技术方案.md) |
+| 验收测试的原始证据 | [docs/验收报告/](docs/验收报告/) |
+| 文档索引与维护约定 | [docs/README.md](docs/README.md) |
 
 ## 开发与测试
 
@@ -116,7 +133,7 @@ node tools\seed-demo-data.js
 node tools\screenshot.js --tag review
 ```
 
-测试覆盖：**31 个套件 / 954 项断言**，包含真实浏览器（Chrome + Edge）交互实测
+测试覆盖：**37 个套件 / 954 项断言**，包含真实浏览器（Chrome + Edge）交互实测
 与本地模拟 IMAP 服务器上的完整采集流程。
 
 > ⚠️ `tools/run-all-tests.js` 与 `tools/cleanup-test-data.js --all` 会**清空业务数据**，

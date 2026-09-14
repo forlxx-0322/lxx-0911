@@ -61,6 +61,8 @@ const SUITES = [
   ['报价明细列顺序', 'tools/test-quotation-column-order.js'],
   /* 1.17 内置列改名 / 删除 */
   ['报价内置列改名与删除', 'tools/test-quotation-builtin-columns.js'],
+  /* 1.18 删列安全性：逐列删除，验证不影响其它功能 */
+  ['报价删列安全性（穷举）', 'tools/test-quotation-delete-column-safety.js'],
   /* 招标采集模块：不联网，用本地模拟 IMAP 服务器跑真实协议 */
   ['招标采集 · MIME 解析', 'tools/test-collect-mail.js'],
   ['招标采集 · IMAP 客户端', 'tools/test-collect-imap.js'],

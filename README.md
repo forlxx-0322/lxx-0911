@@ -133,7 +133,7 @@ node tools\seed-demo-data.js
 node tools\screenshot.js --tag review
 ```
 
-测试覆盖：**40 个套件 / 1079 项断言**，包含真实浏览器（Chrome + Edge）交互实测
+测试覆盖：**41 个套件 / 1129 项断言**，包含真实浏览器（Chrome + Edge）交互实测
 与本地模拟 IMAP 服务器上的完整采集流程。
 
 > ⚠️ `tools/run-all-tests.js` 与 `tools/cleanup-test-data.js --all` 会**清空业务数据**，

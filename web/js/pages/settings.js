@@ -19,6 +19,7 @@ window.CRM = window.CRM || {};
           { key: 'prefs', label: '提醒与偏好' },
           { key: 'backup', label: '备份与恢复' },
           { key: 'data', label: '导入导出' },
+          { key: 'quotetpl', label: '报价模板' },
           { key: 'storage', label: '附件与存储' },
           { key: 'trash', label: '回收站' },
           { key: 'logs', label: '操作日志' },
@@ -52,6 +53,7 @@ window.CRM = window.CRM || {};
         <c-prefs-panel v-else-if="tab === 'prefs'" />
         <c-backup-panel v-else-if="tab === 'backup'" />
         <c-data-panel v-else-if="tab === 'data'" @imported="onImported" />
+        <c-quotation-template-panel v-else-if="tab === 'quotetpl'" />
         <c-attachment-store v-else-if="tab === 'storage'" />
         <c-trash-panel v-else-if="tab === 'trash'" />
         <c-log-panel v-else-if="tab === 'logs'" />

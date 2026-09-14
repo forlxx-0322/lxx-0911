@@ -492,6 +492,111 @@ function exportData(db, id, settings) {
   };
 }
 
+/**
+ * 报价单总列表（跨项目，供独立「报价单」页使用）
+ *
+ * 与 listByProject / listByCustomer 的区别：这两个是"某个项目/客户下有哪些报价单"，
+ * 本函数是"我所有报价单"的全局视图，支持状态/客户/项目/日期/关键词筛选与分页。
+ */
+function listAll(db, opts) {
+  const o = opts || {};
+  const where = ['q.deleted_at IS NULL'];
+  const params = [];
+
+  if (o.status) { where.push('q.status = ?'); params.push(String(o.status)); }
+  if (o.project_id) { where.push('q.project_id = ?'); params.push(Number(o.project_id)); }
+  if (o.customer_id) { where.push('q.customer_id = ?'); params.push(Number(o.customer_id)); }
+  if (o.date_from) { where.push('date(q.quote_date) >= date(?)'); params.push(String(o.date_from)); }
+  if (o.date_to) { where.push('date(q.quote_date) <= date(?)'); params.push(String(o.date_to)); }
+  if (o.q) {
+    where.push('(q.quote_no LIKE ? OR p.name LIKE ? OR c.name LIKE ? OR c.short_name LIKE ?)');
+    const k = `%${o.q}%`;
+    params.push(k, k, k, k);
+  }
+
+  const whereSql = 'WHERE ' + where.join(' AND ');
+  const ORDER = {
+    quote_date: 'date(q.quote_date) DESC, q.id DESC',
+    amount: 'q.total_amount DESC, q.id DESC',
+    status: 'q.status, date(q.quote_date) DESC',
+    version: 'q.version DESC, q.id DESC'
+  };
+  const orderSql = ORDER[o.sort] || ORDER.quote_date;
+
+  const total = db.prepare(
+    `SELECT COUNT(*) AS n FROM quotations q
+     LEFT JOIN projects p ON p.id = q.project_id
+     LEFT JOIN customers c ON c.id = q.customer_id
+     ${whereSql}`
+  ).get(...params).n;
+
+  /* 汇总（在筛选条件下统计，方便一眼看出"报了多少钱、中了几单"） */
+  const sum = db.prepare(
+    `SELECT
+       COUNT(*) AS n,
+       COALESCE(SUM(q.total_amount), 0) AS amount,
+       SUM(CASE WHEN q.status = '已中标' THEN 1 ELSE 0 END) AS won,
+       SUM(CASE WHEN q.status = '已落标' THEN 1 ELSE 0 END) AS lost,
+       SUM(CASE WHEN q.status = '已报出' THEN 1 ELSE 0 END) AS sent,
+       SUM(CASE WHEN q.status = '草稿' THEN 1 ELSE 0 END) AS draft,
+       COALESCE(SUM(CASE WHEN q.status = '已中标' THEN q.total_amount ELSE 0 END), 0) AS won_amount
+     FROM quotations q
+     LEFT JOIN projects p ON p.id = q.project_id
+     LEFT JOIN customers c ON c.id = q.customer_id
+     ${whereSql}`
+  ).get(...params);
+
+  const pageSize = Math.min(Math.max(Number(o.pageSize) || 20, 1), 200);
+  const page = Math.max(Number(o.page) || 1, 1);
+  const offset = (page - 1) * pageSize;
+
+  const rows = plainAll(db.prepare(`
+    SELECT q.*,
+           (SELECT COUNT(*) FROM quotation_items i WHERE i.quotation_id = q.id) AS item_count,
+           p.name AS project_name, p.stage AS project_stage,
+           c.name AS customer_name, c.short_name AS customer_short
+    FROM quotations q
+    LEFT JOIN projects p ON p.id = q.project_id
+    LEFT JOIN customers c ON c.id = q.customer_id
+    ${whereSql}
+    ORDER BY ${orderSql}
+    LIMIT ? OFFSET ?
+  `).all(...params, pageSize, offset));
+
+  const won = Number(sum.won) || 0;
+  const lost = Number(sum.lost) || 0;
+
+  return {
+    list: rows,
+    total,
+    page,
+    pageSize,
+    pages: Math.max(1, Math.ceil(total / pageSize)),
+    summary: {
+      count: Number(sum.n) || 0,
+      amount: money(sum.amount),
+      won_amount: money(sum.won_amount),
+      draft: Number(sum.draft) || 0,
+      sent: Number(sum.sent) || 0,
+      won,
+      lost,
+      /* 中标率只在"已有结果"的单子里算，草稿/已报出不计入分母 */
+      win_rate: (won + lost) > 0 ? Math.round((won / (won + lost)) * 1000) / 10 : null
+    }
+  };
+}
+
+/** 各状态的单数（供筛选标签显示角标） */
+function statusCounts(db) {
+  const rows = plainAll(db.prepare(
+    `SELECT status, COUNT(*) AS n FROM quotations WHERE deleted_at IS NULL GROUP BY status`
+  ).all());
+  const map = {};
+  let total = 0;
+  for (const r of rows) { map[r.status] = r.n; total += r.n; }
+  return { total, byStatus: map, statuses: STATUSES };
+}
+
 module.exports = {
   QUOTATION_FIELDS,
   ITEM_FIELDS,
@@ -499,6 +604,8 @@ module.exports = {
   TERMINAL,
   listByProject,
   listByCustomer,
+  listAll,
+  statusCounts,
   getOne,
   saveQuotation,
   copyAsNewVersion,

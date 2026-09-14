@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 应用入口：装配外壳、挂载页面、处理启动错误
  */
 'use strict';
@@ -116,6 +116,7 @@
   app.component('c-followup-drawer', CRM.pages.FollowupDrawer);
   app.component('c-project-edit', CRM.pages.ProjectEdit);
   app.component('c-payment-drawer', CRM.pages.PaymentDrawer);
+  app.component('c-quotation-template-panel', CRM.pages.QuotationTemplatePanel);
   /* 设置页各面板 */
   app.component('c-dict-manager', CRM.settings.DictManager);
   app.component('c-tag-panel', CRM.settings.TagPanel);

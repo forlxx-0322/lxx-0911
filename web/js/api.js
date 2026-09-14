@@ -1,4 +1,4 @@
-/**
+﻿/**
  * API 客户端 + 字典缓存
  * 约定：服务端统一返回 { ok:true, data } 或 { ok:false, code, message }
  *       本模块把成功响应解包为 data，失败抛出带 code 的 Error。
@@ -151,6 +151,21 @@ window.CRM = window.CRM || {};
     deleteQuotation: (id) => request('DELETE', `/api/quotations/${id}`),
     quotationExportData: (id) => request('GET', `/api/quotations/${id}/export`),
     quotationStatuses: () => request('GET', '/api/quotations/statuses'),
+    /* 跨项目总列表（独立报价单页）与状态计数 */
+    quotationOverview: (params) => request('GET', '/api/quotations/overview?' + toQuery(params)),
+    quotationStatusCounts: () => request('GET', '/api/quotations/status-counts'),
+
+    /* 报价模板 */
+    listTemplates: (params) => request('GET', '/api/quotation-templates?' + toQuery(params)),
+    getQuotationTemplate: (id) => request('GET', `/api/quotation-templates/${id}`),
+    saveQuotationTemplate: (data) => data.id
+      ? request('PUT', `/api/quotation-templates/${data.id}`, data)
+      : request('POST', '/api/quotation-templates', data),
+    deleteQuotationTemplate: (id) => request('DELETE', `/api/quotation-templates/${id}`),
+    moveQuotationTemplate: (id, dir) => request('POST', `/api/quotation-templates/${id}/move`, { dir }),
+    applyQuotationTemplate: (id) => request('POST', `/api/quotation-templates/${id}/apply`),
+    templateFromQuotation: (quotationId, data) =>
+      request('POST', `/api/quotation-templates/from-quotation/${quotationId}`, data || {}),
 
     /* 客户 */
     listCustomers: (params) => request('GET', '/api/customers?' + toQuery(params)),

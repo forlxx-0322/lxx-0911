@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 /* ------------------------------------------------------------------ */
 /* 13 张表结构                                                          */
@@ -398,6 +398,43 @@ const TABLES = [
     delivery_days   INTEGER NOT NULL DEFAULT 0,
     remark          TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL
+  )`,
+
+  /* 19. 报价模板（v6 新增）
+   * 模板 = 一组常用规格，避免每次报价都从零敲明细行。 */
+  `CREATE TABLE IF NOT EXISTS quotation_templates (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT NOT NULL,
+    category      TEXT NOT NULL DEFAULT '',
+    description   TEXT NOT NULL DEFAULT '',
+    unit          TEXT NOT NULL DEFAULT '台',
+    use_count     INTEGER NOT NULL DEFAULT 0,
+    last_used_at  TEXT NOT NULL DEFAULT '',
+    sort          INTEGER NOT NULL DEFAULT 0,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL,
+    deleted_at    TEXT
+  )`,
+
+  /* 20. 报价模板明细行（v6 新增）
+   * 结构与 quotation_items 对齐，但**不含价格**：
+   * 模板沉淀的是"常用规格"，单价随项目与行情变，套用后由使用者填。 */
+  `CREATE TABLE IF NOT EXISTS quotation_template_items (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id     INTEGER NOT NULL,
+    seq             INTEGER NOT NULL DEFAULT 1,
+    item_name       TEXT NOT NULL DEFAULT '',
+    valve_type      TEXT NOT NULL DEFAULT '',
+    size_range      TEXT NOT NULL DEFAULT '',
+    pressure_rating TEXT NOT NULL DEFAULT '',
+    body_material   TEXT NOT NULL DEFAULT '',
+    connection_type TEXT NOT NULL DEFAULT '',
+    quantity        REAL NOT NULL DEFAULT 1,
+    unit            TEXT NOT NULL DEFAULT '台',
+    delivery_days   INTEGER NOT NULL DEFAULT 0,
+    remark          TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL
   )`];
 
 /* ------------------------------------------------------------------ */
@@ -450,7 +487,12 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_quotations_status        ON quotations(status)',
   'CREATE INDEX IF NOT EXISTS idx_quotations_no            ON quotations(quote_no)',
   'CREATE INDEX IF NOT EXISTS idx_quotations_deleted       ON quotations(deleted_at)',
-  'CREATE INDEX IF NOT EXISTS idx_quo_items_quotation      ON quotation_items(quotation_id, seq)'
+  'CREATE INDEX IF NOT EXISTS idx_quo_items_quotation      ON quotation_items(quotation_id, seq)',
+  /* 报价模板索引 */
+  'CREATE INDEX IF NOT EXISTS idx_quotation_templates_sort  ON quotation_templates(sort, id)',
+  'CREATE INDEX IF NOT EXISTS idx_quotation_templates_del   ON quotation_templates(deleted_at)',
+  'CREATE INDEX IF NOT EXISTS idx_quotation_templates_cat   ON quotation_templates(category)',
+  'CREATE INDEX IF NOT EXISTS idx_quo_tpl_items_template    ON quotation_template_items(template_id, seq)'
 ];
 
 /* ------------------------------------------------------------------ */
@@ -758,6 +800,60 @@ const MIGRATIONS = [
       }
 
       return `新增表 ${created.join('、')}；预置报价单状态字典 ${dictAdded} 项`;
+    }
+  },
+
+  /* v5 → v6：报价模板
+   * 新增 quotation_templates / quotation_template_items 两张表。
+   * 纯建表，不改动任何既有表的列，可安全回退（删表即可）。 */
+  {
+    version: 6,
+    note: '新增报价模板：quotation_templates / quotation_template_items 两张表',
+    run(db) {
+      const created = [];
+
+      db.exec(`CREATE TABLE IF NOT EXISTS quotation_templates (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT NOT NULL,
+        category      TEXT NOT NULL DEFAULT '',
+        description   TEXT NOT NULL DEFAULT '',
+        unit          TEXT NOT NULL DEFAULT '台',
+        use_count     INTEGER NOT NULL DEFAULT 0,
+        last_used_at  TEXT NOT NULL DEFAULT '',
+        sort          INTEGER NOT NULL DEFAULT 0,
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        deleted_at    TEXT
+      )`);
+      created.push('quotation_templates');
+
+      db.exec(`CREATE TABLE IF NOT EXISTS quotation_template_items (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id     INTEGER NOT NULL,
+        seq             INTEGER NOT NULL DEFAULT 1,
+        item_name       TEXT NOT NULL DEFAULT '',
+        valve_type      TEXT NOT NULL DEFAULT '',
+        size_range      TEXT NOT NULL DEFAULT '',
+        pressure_rating TEXT NOT NULL DEFAULT '',
+        body_material   TEXT NOT NULL DEFAULT '',
+        connection_type TEXT NOT NULL DEFAULT '',
+        quantity        REAL NOT NULL DEFAULT 1,
+        unit            TEXT NOT NULL DEFAULT '台',
+        delivery_days   INTEGER NOT NULL DEFAULT 0,
+        remark          TEXT NOT NULL DEFAULT '',
+        created_at      TEXT NOT NULL
+      )`);
+      created.push('quotation_template_items');
+
+      for (const sql of [
+        'CREATE INDEX IF NOT EXISTS idx_quotation_templates_sort  ON quotation_templates(sort, id)',
+        'CREATE INDEX IF NOT EXISTS idx_quotation_templates_del   ON quotation_templates(deleted_at)',
+        'CREATE INDEX IF NOT EXISTS idx_quotation_templates_cat   ON quotation_templates(category)',
+        'CREATE INDEX IF NOT EXISTS idx_quo_tpl_items_template    ON quotation_template_items(template_id, seq)'
+      ]) db.exec(sql);
+
+      return `新增表 ${created.join('、')}`;
     }
   }
 ];

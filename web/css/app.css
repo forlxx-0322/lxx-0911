@@ -1,4 +1,4 @@
-/* ==========================================================================
+﻿/* ==========================================================================
    客户管理系统 · 全局样式
    阶段一：设计令牌 + 布局骨架 + 基础组件
    ========================================================================== */
@@ -2087,3 +2087,21 @@ body {
 
 
 
+
+/* 报价单抽屉里的「套用模板」条 */
+.tpl-apply-bar {
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--c-surface-2);
+  border: 1px dashed var(--c-border-strong);
+  border-radius: var(--radius-sm);
+}
+
+/* 报价模板列表页 */
+.tpl-sort { display: flex; flex-direction: column; gap: 1px; }
+.tpl-sort .icon-btn { padding: 0 4px; font-size: 11px; line-height: 1.2; }
+.tpl-sort .icon-btn:disabled { opacity: .35; }
+.tpl-name { font-weight: 600; }
+.tpl-desc { font-size: var(--fs-xs); color: var(--c-text-3); margin-top: 2px; }

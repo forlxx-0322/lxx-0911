@@ -31,7 +31,9 @@ window.CRM = window.CRM || {};
         followOpen: false,
         contactOpen: false,
         contact: null,
-        savingContact: false
+        savingContact: false,
+        /* 报价记录（跨该客户所有项目，便于比价与回看历史报价） */
+        quotations: []
       };
     },
     computed: {
@@ -43,6 +45,7 @@ window.CRM = window.CRM || {};
           { key: 'contacts', label: '联系人', badge: c ? c.contacts.length : 0 },
           { key: 'followups', label: '跟进记录', badge: c ? c.followups.length : 0 },
           { key: 'projects', label: '关联项目', badge: c ? c.projects.length : 0 },
+          { key: 'quotations', label: '报价记录', badge: this.quotations.length },
           { key: 'files', label: '附件' },
           { key: 'logs', label: '变更记录', badge: c ? c.logs.length : 0 }
         ];
@@ -73,10 +76,36 @@ window.CRM = window.CRM || {};
         try {
           await CRM.api.loadDict();
           this.customer = await CRM.api.getCustomer(this.id);
+          await this.loadQuotations();
         } catch (e) {
           this.error = e.message || '加载失败';
         } finally {
           this.loading = false;
+        }
+      },
+
+      /* 报价记录：跨该客户的**所有项目**汇总，便于比价与回看历史报价 */
+      async loadQuotations() {
+        try {
+          const r = await CRM.api.listQuotations({ customer_id: this.id });
+          this.quotations = r.list || [];
+        } catch (_) {
+          this.quotations = [];
+        }
+      },
+      quotationStatusClass(s) {
+        if (s === '已中标') return 'success';
+        if (s === '已落标') return 'danger';
+        if (s === '已报出') return 'warning';
+        return 'muted';
+      },
+      async exportQuotation(row) {
+        try {
+          const data = await CRM.api.quotationExportData(row.id);
+          CRM.quotation.buildWorkbook(data);
+          CRM.toast('报价单已导出', 'success');
+        } catch (e) {
+          CRM.toast(e.message || '导出失败', 'error');
         }
       },
 
@@ -370,6 +399,64 @@ window.CRM = window.CRM || {};
                   </tbody>
                 </table>
               </div>
+            </div>
+          </div>
+
+          <!-- ============ 报价记录（跨该项目下所有项目） ============ -->
+          <div v-show="tab === 'quotations'" class="card">
+            <div class="card-head">
+              <div>
+                <div class="card-title">报价记录</div>
+                <div class="card-sub">
+                  该客户<strong>全部项目</strong>下的报价单，便于比价与回看历史报价
+                </div>
+              </div>
+            </div>
+
+            <c-empty v-if="!quotations.length" icon="file"
+                     title="还没有报价记录"
+                     desc="报价单在项目详情页的「报价单」标签里创建；这里会汇总该客户所有项目的报价" />
+            <div v-else class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>报价单号</th>
+                    <th style="width:56px">版本</th>
+                    <th>项目</th>
+                    <th style="width:104px">报价日期</th>
+                    <th style="width:92px">状态</th>
+                    <th style="width:58px">行数</th>
+                    <th style="width:120px">合计(元)</th>
+                    <th style="width:110px">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="q in quotations" :key="q.id">
+                    <td class="mono">{{ q.quote_no }}</td>
+                    <td>V{{ q.version }}</td>
+                    <td>
+                      <span v-if="q.project_name">{{ q.project_name }}</span>
+                      <span v-else class="muted">—</span>
+                    </td>
+                    <td>{{ q.quote_date || '—' }}</td>
+                    <td><span class="tag" :class="quotationStatusClass(q.status)">{{ q.status }}</span></td>
+                    <td>{{ q.item_count }}</td>
+                    <td class="num">{{ fmtMoney(q.total_amount) }}</td>
+                    <td>
+                      <button class="btn btn-sm" @click="exportQuotation(q)">导出</button>
+                    </td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colspan="6" class="quo-total-label">合计（{{ quotations.length }} 张）</td>
+                    <td class="quo-total">
+                      {{ fmtMoney(quotations.reduce((s, q) => s + (Number(q.total_amount) || 0), 0)) }}
+                    </td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
           </div>
 

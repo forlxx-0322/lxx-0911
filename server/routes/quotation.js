@@ -28,6 +28,26 @@ module.exports = async function quotationRoutes(ctx) {
     return ok({ list: quotation.STATUSES, terminal: quotation.TERMINAL });
   }
 
+  /* /api/quotations/status-counts —— 各状态单数（供列表页筛选标签） */
+  if (segments[2] === 'status-counts' && method === 'GET') {
+    return ok(quotation.statusCounts(db));
+  }
+
+  /* /api/quotations/overview —— 跨项目总列表（供独立「报价单」页） */
+  if (segments[2] === 'overview' && method === 'GET') {
+    return ok(quotation.listAll(db, {
+      status: query.status,
+      project_id: query.project_id,
+      customer_id: query.customer_id,
+      date_from: query.date_from,
+      date_to: query.date_to,
+      q: query.q,
+      sort: query.sort,
+      page: query.page,
+      pageSize: query.pageSize
+    }));
+  }
+
   /* /api/quotations/:id 及其子动作 */
   const id = segments[2] ? Number(segments[2]) : null;
   const action = segments[3] || '';

@@ -35,6 +35,7 @@ const SUITES = [
   ['阶段六 · 接口', 'tools/test-phase6-api.js'],
   ['阶段六 · 界面交互', 'tools/test-phase6-ui-interaction.js'],
   ['数据库结构迁移', 'tools/test-migration.js'],
+  ['数据库迁移（全面）', 'tools/test-migration-full.js'],
   /* 地址 → 地州归属 → 地图显示（含历史脏数据纠正与下拉取值） */
   ['地址归属与地图显示', 'tools/test-region-map.js'],
   ['归属地州历史数据纠正', 'tools/test-region-legacy-fix.js'],
@@ -51,6 +52,9 @@ const SUITES = [
   ['地图客户点', 'tools/test-map-points.js'],
   ['报价单服务层', 'tools/test-quotation-service.js'],
   ['报价单全流程', 'tools/test-quotation-flow.js'],
+  /* 1.12 报价模板 + 报价单管理 */
+  ['报价模板服务层', 'tools/test-quotation-template-service.js'],
+  ['报价模板全流程', 'tools/test-quotation-template-flow.js'],
   /* 招标采集模块：不联网，用本地模拟 IMAP 服务器跑真实协议 */
   ['招标采集 · MIME 解析', 'tools/test-collect-mail.js'],
   ['招标采集 · IMAP 客户端', 'tools/test-collect-imap.js'],

@@ -21,6 +21,7 @@ window.CRM = window.CRM || {};
     projects: 'M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-9Z',
     tasks: 'M9 4.5h9M9 12h9M9 19.5h9M4 4.5h.01M4 12h.01M4 19.5h.01',
     collect: 'M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13A1.5 1.5 0 0 1 18.5 20h-13A1.5 1.5 0 0 1 4 18.5v-13ZM4 7.5l8 5.5 8-5.5M8.5 3v3M15.5 3v3',
+    quotations: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5ZM14 3v5h5M9 13h6M9 17h4',
     settings: 'M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.56V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.7 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6h.09A1.7 1.7 0 0 0 10 3.04V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.7a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.56 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1.01Z',
     chevron: 'M9 6l6 6-6 6'
   };
@@ -30,6 +31,7 @@ window.CRM = window.CRM || {};
     { key: 'home',      path: '/home',      title: '首页总览', icon: ICON.home,      group: '导航' },
     { key: 'customers', path: '/customers', title: '客户管理', icon: ICON.customers, group: '导航' },
     { key: 'projects',  path: '/projects',  title: '项目管理', icon: ICON.projects,  group: '导航' },
+    { key: 'quotations', path: '/quotations', title: '报价单', icon: ICON.quotations, group: '导航' },
     { key: 'tasks',     path: '/tasks',     title: '待办中心', icon: ICON.tasks,     group: '导航' },
     { key: 'collect',   path: '/collect',   title: '招标采集', icon: ICON.collect,   group: '导航' },
     { key: 'settings',  path: '/settings',  title: '功能设置', icon: ICON.settings,  group: '系统' }

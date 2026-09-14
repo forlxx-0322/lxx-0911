@@ -57,7 +57,11 @@ window.CRM = window.CRM || {};
       return {
         form: blankForm(),
         saving: false,
-        errors: {}
+        errors: {},
+        /* 报价模板 */
+        templates: [],
+        templateId: '',
+        applyingTpl: false
       };
     },
     computed: {
@@ -72,9 +76,101 @@ window.CRM = window.CRM || {};
       }
     },
     watch: {
-      modelValue(open) { if (open) this.reset(); }
+      async modelValue(open) {
+        if (!open) return;
+        this.reset();
+        await this.loadTemplates();
+      }
     },
     methods: {
+      /* ---------------- 报价模板 ---------------- */
+      async loadTemplates() {
+        try {
+          const r = await CRM.api.listTemplates({ enabledOnly: 1 });
+          this.templates = r.list || [];
+        } catch (_) {
+          this.templates = [];
+        }
+      },
+
+      /**
+       * 套用模板：把模板的规格行填进明细。
+       *
+       * 两种策略：
+       *   - 明细为空（只有一行且什么都没填）→ 直接替换
+       *   - 明细已有内容 → 询问是"替换"还是"追加"
+       * 模板不含价格，带出的行单价留空由使用者填。
+       */
+      async applyTemplate() {
+        const id = this.templateId;
+        if (!id) { CRM.toast('请先选择一个模板', 'error'); return; }
+        const t = this.templates.find((x) => String(x.id) === String(id));
+        const hasContent = this.form.items.some((it) => it.item_name || it.valve_type || it.size_range);
+
+        let replace = true;
+        if (hasContent) {
+          const yes = await CRM.confirm({
+            title: '套用模板',
+            message: `明细里已经有内容了。<br><br>`
+              + `点「替换」会<strong>清空现有 ${this.form.items.length} 行</strong>再填入模板；<br>`
+              + `点「追加」会保留现有行、把模板行加到后面。`,
+            okText: '替换',
+            cancelText: '追加'
+          });
+          replace = yes;
+        }
+
+        this.applyingTpl = true;
+        try {
+          const r = await CRM.api.applyQuotationTemplate(id);
+          const rows = (r.items || []).map((it) => Object.assign(blankItem(), {
+            item_name: it.item_name, valve_type: it.valve_type, size_range: it.size_range,
+            pressure_rating: it.pressure_rating, body_material: it.body_material,
+            connection_type: it.connection_type, quantity: it.quantity, unit: it.unit,
+            unit_price: '', discount: 0,
+            delivery_days: it.delivery_days || '', remark: it.remark
+          }));
+          if (!rows.length) { CRM.toast('该模板没有明细行', 'error'); return; }
+          this.form.items = replace ? rows : this.form.items.concat(rows);
+          CRM.toast(
+            `${replace ? '已套用' : '已追加'}模板「${r.template.name}」${rows.length} 行规格，请填写单价`,
+            'success', 5000);
+        } catch (e) {
+          CRM.toast(e.message || '套用模板失败', 'error');
+        } finally {
+          this.applyingTpl = false;
+        }
+      },
+
+      /** 把当前明细存为模板（新建时才显示） */
+      async saveAsTemplate() {
+        const real = this.form.items.filter((it) => it.item_name || it.valve_type || it.size_range);
+        if (!real.length) { CRM.toast('明细为空，先填几行规格再存为模板', 'error'); return; }
+        const name = await CRM.prompt({
+          title: '存为报价模板',
+          label: '模板名称',
+          placeholder: '例如：炼化常用球阀组合',
+          value: ''
+        });
+        if (!name) return;
+        try {
+          const r = await CRM.api.saveQuotationTemplate({
+            name,
+            description: '在报价单里保存的规格组合',
+            items: real.map((it) => ({
+              item_name: it.item_name, valve_type: it.valve_type, size_range: it.size_range,
+              pressure_rating: it.pressure_rating, body_material: it.body_material,
+              connection_type: it.connection_type, quantity: it.quantity, unit: it.unit,
+              delivery_days: it.delivery_days, remark: it.remark
+            }))
+          });
+          CRM.toast(`已存为模板「${name}」（${r.item_count} 行规格，不含价格）`, 'success', 5000);
+          await this.loadTemplates();
+        } catch (e) {
+          CRM.toast(e.message || '存为模板失败', 'error');
+        }
+      },
+
       money(v) {
         const n = Number(v);
         return Number.isFinite(n) ? Math.round(n * 100) / 100 : 0;
@@ -221,6 +317,35 @@ window.CRM = window.CRM || {};
           <div style="flex:1"></div>
           <button class="btn btn-sm" type="button" @click="addRow">+ 增加一行</button>
         </div>
+
+        <!-- 套用模板：把常用规格一键带出来 -->
+        <div v-if="templates.length" class="tpl-apply-bar">
+          <span class="muted" style="font-size:var(--fs-xs)">套用模板</span>
+          <select class="input input-sm" style="max-width:260px" v-model="templateId">
+            <option value="">选择模板…</option>
+            <option v-for="t in templates" :key="t.id" :value="t.id">
+              {{ t.name }}（{{ t.item_count }} 行）{{ t.category ? ' · ' + t.category : '' }}
+            </option>
+          </select>
+          <button class="btn btn-sm" type="button" :disabled="!templateId || applyingTpl"
+                  @click="applyTemplate">
+            {{ applyingTpl ? '套用中…' : '带出规格' }}
+          </button>
+          <button v-if="!isEdit" class="btn btn-sm" type="button" @click="saveAsTemplate">
+            把当前明细存为模板
+          </button>
+          <span class="muted" style="font-size:var(--fs-xxs,11px)">
+            模板只带规格，不带价格
+          </span>
+        </div>
+        <div v-else-if="!isEdit" class="tpl-apply-bar">
+          <span class="muted" style="font-size:var(--fs-xs)">
+            还没有报价模板 —— 填好明细后可点右侧「把当前明细存为模板」，下次同类报价一键带出
+          </span>
+          <div style="flex:1"></div>
+          <button class="btn btn-sm" type="button" @click="saveAsTemplate">把当前明细存为模板</button>
+        </div>
+
         <div v-if="errors.items" class="field-error" style="margin-bottom:8px">{{ errors.items }}</div>
 
         <div class="quo-table-wrap">

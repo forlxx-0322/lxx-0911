@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 阶段七 · 最终验收测试（浏览器部分）
  *
  * 覆盖必须在真实浏览器里验的剩余项：
@@ -1187,7 +1187,7 @@ const created = [];
     /* 遍历全部页面与主要交互，记录所有网络请求。
        采集页（#/collect）也一并访问：它是唯一会联网的模块，
        此处必须确认在「未启用来源」状态下它同样零外部请求。 */
-    for (const route of ['home', 'customers', 'projects', 'tasks', 'collect', 'settings']) {
+    for (const route of ['home', 'customers', 'projects', 'quotations', 'tasks', 'collect', 'settings']) {
       await goto('#/' + route, 3200);
     }
     await cdp.js(`(async () => {
@@ -1290,8 +1290,10 @@ const created = [];
     const eb = await launchBrowser(EDGE, 9241, edgeProfile);
     if (eb) {
       const pages = [];
-      /* 导航项：首页/客户/项目/待办/招标采集 + 功能设置 = 6 */
-      for (const route of ['home', 'customers', 'projects', 'tasks', 'collect', 'settings']) {
+      /* 导航项：首页 / 客户 / 项目 / 报价单 / 待办 / 招标采集（导航组）
+         + 功能设置（系统组）= 7 项。
+         1.12 起新增「报价单」独立页，故从 6 项改为 7 项。 */
+      for (const route of ['home', 'customers', 'projects', 'quotations', 'tasks', 'collect', 'settings']) {
         await eb.cdp.js(`location.href = ${JSON.stringify(BASE + '/#/' + route)}; 'ok'`);
         await sleep(3400);
         const state = await eb.cdp.js(`(() => ({
@@ -1301,8 +1303,8 @@ const created = [];
         }))()`);
         pages.push({ route, ...state });
       }
-      const allOk = pages.every((p) => p.hasLayout && p.navCount === 6 && !p.err);
-      check('24b', `Edge 下六个页面布局与导航正常（${eb.version.Browser}）`,
+      const allOk = pages.every((p) => p.hasLayout && p.navCount === 7 && !p.err);
+      check('24b', `Edge 下七个页面布局与导航正常（${eb.version.Browser}）`,
         allOk,
         pages.map((p) => `${p.route}${p.hasLayout && !p.err ? '✓' : '✗'}`).join(' ')
         + `；导航项 ${pages[0].navCount} 个`);

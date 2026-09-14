@@ -28,7 +28,14 @@ function makeDb() {
     item_name TEXT, valve_type TEXT, size_range TEXT, pressure_rating TEXT,
     body_material TEXT, connection_type TEXT, quantity REAL, unit TEXT,
     unit_price REAL, discount REAL, subtotal REAL, delivery_days INTEGER,
-    remark TEXT, created_at TEXT)`);
+    remark TEXT, extra TEXT NOT NULL DEFAULT '{}', created_at TEXT)`);
+  /* 报价自定义列的列定义表（v7 起）：本套件不建列，但服务层会查这张表，
+     缺表虽然已做兼容，这里仍按真实结构建出来，避免测的不是真实路径 */
+  db.exec(`CREATE TABLE quotation_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'text',
+    options TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1, remark TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)`);
   db.exec(`CREATE TABLE projects (
     id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, customer_id INTEGER, stage TEXT,
     bid_result TEXT, contract_amount REAL DEFAULT 0, deleted_at TEXT, updated_at TEXT)`);

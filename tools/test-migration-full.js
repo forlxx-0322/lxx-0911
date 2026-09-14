@@ -165,6 +165,7 @@ function makeLegacyDb(file) {
   if (TARGET >= 4) expectTables.push('collect_sources', 'collect_staging', 'collect_logs');
   if (TARGET >= 5) expectTables.push('quotations', 'quotation_items');
   if (TARGET >= 6) expectTables.push('quotation_templates', 'quotation_template_items');
+  if (TARGET >= 7) expectTables.push('quotation_fields');
   for (const t of expectTables) {
     const ok = tablesAfter.includes(t);
     check(`新建表 ${t}`, ok, ok ? `${after.prepare(`PRAGMA table_info(${t})`).all().length} 列` : '未建');
@@ -227,6 +228,41 @@ function makeLegacyDb(file) {
       `${tplItemCols.length} 列；价格列：${priceCols.length ? priceCols.join('、') : '无'}`);
 
     check('报价模板索引已建立', tplIdx.length >= 4, tplIdx.join('、'));
+  }
+
+  /* ---------- 报价自定义列（v7） ---------- */
+  if (TARGET >= 7) {
+    const fCols = after.prepare('PRAGMA table_info(quotation_fields)').all().map((c) => c.name);
+    const itemExtra = after.prepare('PRAGMA table_info(quotation_items)').all();
+    const tplItemExtra = after.prepare('PRAGMA table_info(quotation_template_items)').all();
+    const fIdx = after.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='quotation_fields'"
+    ).all().map((r) => r.name);
+    const extraCol = itemExtra.find((c) => c.name === 'extra');
+    const extraColTpl = tplItemExtra.find((c) => c.name === 'extra');
+
+    check('quotation_fields 必需列齐全',
+      ['id', 'name', 'kind', 'options', 'unit', 'sort', 'enabled', 'remark',
+        'created_at', 'updated_at', 'deleted_at'].every((c) => fCols.includes(c)),
+      `${fCols.length} 列`);
+
+    /* extra 必须有默认值 '{}'：老库升级后既有明细行要能直接读出空对象，
+       不能是 NULL（否则解析要多写一层容错，且容易在别处漏判）。 */
+    check('quotation_items 加了 extra 列且默认值为 {}',
+      !!extraCol && extraCol.notnull === 1 && String(extraCol.dflt_value).includes('{}'),
+      extraCol ? `notnull=${extraCol.notnull} default=${extraCol.dflt_value}` : '未加列');
+    check('quotation_template_items 加了 extra 列且默认值为 {}',
+      !!extraColTpl && extraColTpl.notnull === 1 && String(extraColTpl.dflt_value).includes('{}'),
+      extraColTpl ? `notnull=${extraColTpl.notnull} default=${extraColTpl.dflt_value}` : '未加列');
+
+    check('报价自定义列索引已建立', fIdx.length >= 1, fIdx.join('、') || '未建');
+
+    /* 迁移后既有的明细行 extra 必须是可解析的空对象 */
+    const legacyExtra = after.prepare(
+      "SELECT COUNT(*) AS n FROM quotation_items WHERE extra IS NULL OR extra = ''"
+    ).get().n;
+    check('迁移后既有明细行的 extra 都是合法空对象（无 NULL / 空串）', legacyExtra === 0,
+      `非法 extra 行数 ${legacyExtra}`);
   }
 
   /* ---------- 新设置项 ---------- */

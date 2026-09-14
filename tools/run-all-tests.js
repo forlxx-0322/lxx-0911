@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 一键运行全部测试套件，汇总各套件通过/失败数量。
  *
  * 运行顺序与依赖（很关键）：
@@ -55,6 +55,8 @@ const SUITES = [
   /* 1.12 报价模板 + 报价单管理 */
   ['报价模板服务层', 'tools/test-quotation-template-service.js'],
   ['报价模板全流程', 'tools/test-quotation-template-flow.js'],
+  /* 1.15 报价自定义列 */
+  ['报价自定义列全流程', 'tools/test-quotation-custom-fields.js'],
   /* 招标采集模块：不联网，用本地模拟 IMAP 服务器跑真实协议 */
   ['招标采集 · MIME 解析', 'tools/test-collect-mail.js'],
   ['招标采集 · IMAP 客户端', 'tools/test-collect-imap.js'],

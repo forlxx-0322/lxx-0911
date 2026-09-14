@@ -17,7 +17,9 @@ window.CRM = window.CRM || {};
     return {
       item_name: '', valve_type: '', size_range: '', pressure_rating: '',
       body_material: '', connection_type: '', quantity: 1, unit: '台',
-      delivery_days: '', remark: ''
+      delivery_days: '', remark: '',
+      /* 自定义列的值：键 = 列 id，与报价单共用同一套列 */
+      extra: {}
     };
   }
 
@@ -35,7 +37,9 @@ window.CRM = window.CRM || {};
         editing: null,
         form: { name: '', category: '', description: '', unit: '台', enabled: 1, items: [blankItem()] },
         saving: false,
-        errors: {}
+        errors: {},
+        /* 自定义列（与报价单共用同一套列） */
+        fields: []
       };
     },
     computed: {
@@ -46,9 +50,28 @@ window.CRM = window.CRM || {};
     },
     async created() {
       await CRM.api.loadDict();
-      await this.load();
+      this.syncFields();
+      this.offFields = CRM.quotationFields.onChange((list) => { this.fields = list; });
+      await Promise.all([this.load(), this.loadFields()]);
+    },
+    beforeUnmount() {
+      if (this.offFields) this.offFields();
     },
     methods: {
+      /* ---------------- 自定义列 ---------------- */
+      syncFields() { this.fields = CRM.quotationFields.enabled(); },
+      async loadFields() {
+        try {
+          await CRM.quotationFields.load(true);
+          this.syncFields();
+        } catch (_) { /* 读列失败不影响模板本身 */ }
+      },
+      openFields() { CRM.quotationFields.open(); },
+      fieldWidth(f) {
+        const label = String(f.name || '') + (f.unit ? `（${f.unit}）` : '');
+        return Math.min(160, Math.max(84, label.length * 13 + 26)) + 'px';
+      },
+
       async load() {
         this.loading = true;
         try {
@@ -85,7 +108,8 @@ window.CRM = window.CRM || {};
                 item_name: it.item_name, valve_type: it.valve_type, size_range: it.size_range,
                 pressure_rating: it.pressure_rating, body_material: it.body_material,
                 connection_type: it.connection_type, quantity: it.quantity, unit: it.unit,
-                delivery_days: it.delivery_days || '', remark: it.remark
+                delivery_days: it.delivery_days || '', remark: it.remark,
+                extra: Object.assign({}, it.extra || {})
               }))
               : [blankItem()]
           };
@@ -112,6 +136,7 @@ window.CRM = window.CRM || {};
         for (const k of ['item_name', 'valve_type', 'size_range', 'pressure_rating', 'body_material', 'connection_type', 'unit', 'delivery_days']) {
           dst[k] = src[k];
         }
+        dst.extra = Object.assign({}, src.extra || {});
         this.form.items.splice(i + 1, 0, dst);
       },
 
@@ -293,6 +318,10 @@ window.CRM = window.CRM || {};
           <div class="quo-items-head">
             <div class="quo-items-title">规格明细</div>
             <div style="flex:1"></div>
+            <button class="btn btn-sm" type="button" @click="openFields"
+                    title="增删自定义列：介质、设计压力、设计温度、泄露等级、执行器型号…（列数不限）">
+              ⚙ 自定义列<span v-if="fields.length">（{{ fields.length }}）</span>
+            </button>
             <button class="btn btn-sm" type="button" @click="addRow">+ 增加一行</button>
           </div>
           <div v-if="errors.items" class="field-error" style="margin-bottom:8px">{{ errors.items }}</div>
@@ -307,6 +336,9 @@ window.CRM = window.CRM || {};
                   <th style="width:104px">压力</th>
                   <th style="width:110px">阀体材质</th>
                   <th style="width:96px">连接</th>
+                  <th v-for="f in fields" :key="f.id" :style="{width: fieldWidth(f)}">
+                    {{ f.name }}<span v-if="f.unit" class="quo-th-unit">（{{ f.unit }}）</span>
+                  </th>
                   <th style="width:76px">数量</th>
                   <th style="width:60px">单位</th>
                   <th style="width:70px">交期</th>
@@ -347,6 +379,12 @@ window.CRM = window.CRM || {};
                       <option v-for="o in (dict.connection_type || [])" :key="o" :value="o"></option>
                     </datalist>
                   </td>
+                  <td v-for="f in fields" :key="f.id">
+                    <input class="input input-sm" :class="{ num: f.kind === 'number' }"
+                           :type="f.kind === 'number' ? 'number' : 'text'"
+                           :list="f.kind === 'select' ? ('tqf-' + f.id) : null"
+                           v-model="it.extra[f.id]" />
+                  </td>
                   <td><input class="input input-sm num" type="number" min="0" step="any" v-model="it.quantity" /></td>
                   <td><input class="input input-sm" v-model="it.unit" /></td>
                   <td><input class="input input-sm num" type="number" min="0" v-model="it.delivery_days" /></td>
@@ -360,6 +398,15 @@ window.CRM = window.CRM || {};
                 </tr>
               </tbody>
             </table>
+          </div>
+
+          <!-- 下拉候选值：统一放表格外，避免每行重复渲染 datalist -->
+          <div style="display:none">
+            <template v-for="f in fields" :key="f.id">
+              <datalist v-if="f.kind === 'select'" :id="'tqf-' + f.id">
+                <option v-for="o in (f.options_list || [])" :key="o" :value="o"></option>
+              </datalist>
+            </template>
           </div>
 
           <div class="mt-3">

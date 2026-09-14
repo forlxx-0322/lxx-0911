@@ -1,4 +1,4 @@
-﻿/**
+/**
  * API 客户端 + 字典缓存
  * 约定：服务端统一返回 { ok:true, data } 或 { ok:false, code, message }
  *       本模块把成功响应解包为 data，失败抛出带 code 的 Error。
@@ -166,6 +166,14 @@ window.CRM = window.CRM || {};
     applyQuotationTemplate: (id) => request('POST', `/api/quotation-templates/${id}/apply`),
     templateFromQuotation: (quotationId, data) =>
       request('POST', `/api/quotation-templates/from-quotation/${quotationId}`, data || {}),
+
+    /* 报价自定义列（报价单与报价模板共用） */
+    listQuotationFields: (params) => request('GET', '/api/quotation-fields?' + toQuery(params)),
+    saveQuotationField: (data) => data.id
+      ? request('PUT', `/api/quotation-fields/${data.id}`, data)
+      : request('POST', '/api/quotation-fields', data),
+    deleteQuotationField: (id) => request('DELETE', `/api/quotation-fields/${id}`),
+    moveQuotationField: (id, dir) => request('POST', `/api/quotation-fields/${id}/move`, { dir }),
 
     /* 客户 */
     listCustomers: (params) => request('GET', '/api/customers?' + toQuery(params)),

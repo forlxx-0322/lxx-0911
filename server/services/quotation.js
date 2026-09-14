@@ -11,6 +11,8 @@
  */
 'use strict';
 
+const fieldsvc = require('./quotation-field');
+
 const plain = (r) => (r === undefined || r === null ? r : Object.assign({}, r));
 const plainAll = (rows) => (rows || []).map(plain);
 
@@ -26,7 +28,7 @@ const QUOTATION_FIELDS = [
 const ITEM_FIELDS = [
   'item_name', 'valve_type', 'size_range', 'pressure_rating', 'body_material',
   'connection_type', 'quantity', 'unit', 'unit_price', 'discount',
-  'delivery_days', 'remark'
+  'delivery_days', 'remark', 'extra'
 ];
 
 /** 状态白名单：与字典 quotation_status 一致 */
@@ -64,8 +66,14 @@ function money(v) {
  * 归一化一行明细并计算小计。
  * 折扣按百分比理解更符合销售习惯（填 10 = 让 10%），但库里存的是小数比例，
  * 这里兼容两种输入：> 1 视为百分比，≤ 1 视为比例。
+ *
+ * extra（报价自定义列的值）以 JSON 字符串入库，键 = 列 id；
+ * 只保留库里确实存在的列，列删掉后残留值会在下次保存时自然消失。
+ *
+ * @param {object} [db]       传了就校验自定义列的合法性（不传则 extra 一律清空）
+ * @param {Set}    [extraIds] 预取的列 id 集合，批量保存时避免逐行查库
  */
-function normalizeItem(raw, seq) {
+function normalizeItem(raw, seq, db, extraIds) {
   const d = pick(raw, ITEM_FIELDS);
   const quantity = num(d.quantity, 0);
   const unitPrice = num(d.unit_price, 0);
@@ -75,6 +83,9 @@ function normalizeItem(raw, seq) {
   if (discount > 1) discount = 1;                        // 折扣超过 100% 视为全免
 
   const subtotal = money(quantity * unitPrice * (1 - discount));
+  const extra = db
+    ? fieldsvc.normalizeExtra(db, d.extra, extraIds)
+    : (d.extra === undefined ? '{}' : JSON.stringify(fieldsvc.parseExtra(d.extra)));
   return {
     seq,
     item_name: String(d.item_name === undefined || d.item_name === null ? '' : d.item_name).trim(),
@@ -89,7 +100,8 @@ function normalizeItem(raw, seq) {
     discount: Math.round(discount * 10000) / 10000,
     subtotal,
     delivery_days: Math.round(num(d.delivery_days, 0)),
-    remark: String(d.remark || '').trim()
+    remark: String(d.remark || '').trim(),
+    extra
   };
 }
 
@@ -97,7 +109,8 @@ function normalizeItem(raw, seq) {
 function isBlankItem(it) {
   return !it.item_name && !it.valve_type && !it.size_range && !it.pressure_rating
     && !it.body_material && !it.connection_type
-    && !it.quantity && !it.unit_price && !it.remark;
+    && !it.quantity && !it.unit_price && !it.remark
+    && !fieldsvc.extraHasValue(it.extra);
 }
 
 function sumItems(items) {
@@ -180,7 +193,7 @@ function getOne(db, id) {
   if (!q) return null;
   const items = plainAll(db.prepare(
     'SELECT * FROM quotation_items WHERE quotation_id = ? ORDER BY seq ASC, id ASC'
-  ).all(Number(id)));
+  ).all(Number(id))).map((it) => Object.assign(it, { extra: fieldsvc.parseExtra(it.extra) }));
 
   /* 版本链：同一 parent 链上的所有版本（便于对比） */
   const versions = plainAll(db.prepare(`
@@ -217,9 +230,10 @@ function saveQuotation(db, payload, settings) {
     const e = new Error('项目不存在或已删除'); e.status = 404; e.code = 'PROJECT_NOT_FOUND'; throw e;
   }
 
-  /* 明细先归一化（含丢弃空行） */
+  /* 明细先归一化（含丢弃空行）；自定义列的值在这里一并校验与清洗 */
+  const extraIds = fieldsvc.liveFieldIds(db);
   const rawItems = Array.isArray(p.items) ? p.items : [];
-  const items = rawItems.map((r, i) => normalizeItem(r, i + 1)).filter((it) => !isBlankItem(it));
+  const items = rawItems.map((r, i) => normalizeItem(r, i + 1, db, extraIds)).filter((it) => !isBlankItem(it));
   items.forEach((it, i) => { it.seq = i + 1; });
   const total = sumItems(items);
 
@@ -264,12 +278,12 @@ function saveQuotation(db, payload, settings) {
     db.prepare('DELETE FROM quotation_items WHERE quotation_id = ?').run(qid);
     const insItem = db.prepare(`INSERT INTO quotation_items
       (quotation_id, seq, item_name, valve_type, size_range, pressure_rating, body_material,
-       connection_type, quantity, unit, unit_price, discount, subtotal, delivery_days, remark, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+       connection_type, quantity, unit, unit_price, discount, subtotal, delivery_days, remark, extra, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const it of items) {
       insItem.run(qid, it.seq, it.item_name, it.valve_type, it.size_range, it.pressure_rating,
         it.body_material, it.connection_type, it.quantity, it.unit, it.unit_price, it.discount,
-        it.subtotal, it.delivery_days, it.remark, ts);
+        it.subtotal, it.delivery_days, it.remark, it.extra, ts);
     }
 
     /* 操作日志 */
@@ -314,12 +328,12 @@ function copyAsNewVersion(db, id) {
 
     const insItem = db.prepare(`INSERT INTO quotation_items
       (quotation_id, seq, item_name, valve_type, size_range, pressure_rating, body_material,
-       connection_type, quantity, unit, unit_price, discount, subtotal, delivery_days, remark, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+       connection_type, quantity, unit, unit_price, discount, subtotal, delivery_days, remark, extra, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const it of src.items) {
       insItem.run(newId, it.seq, it.item_name, it.valve_type, it.size_range, it.pressure_rating,
         it.body_material, it.connection_type, it.quantity, it.unit, it.unit_price, it.discount,
-        it.subtotal, it.delivery_days, it.remark, ts);
+        it.subtotal, it.delivery_days, it.remark, fieldsvc.normalizeExtra(db, it.extra), ts);
     }
 
     db.prepare(`INSERT INTO activity_logs (entity_type, entity_id, action, summary, detail, created_at)
@@ -453,6 +467,25 @@ function exportData(db, id, settings) {
   const q = getOne(db, id);
   if (!q) return null;
   const s = settings || {};
+
+  /* 自定义列：导出用**列名**做键（单据是给人看的），并只保留本单真的填过值的列，
+     免得导出一堆空列把表格撑宽。顺序沿用列定义的排序。 */
+  const fmap = fieldsvc.fieldMap(db);
+  const ordered = Array.from(fmap.values()).sort((a, b) => (a.sort - b.sort) || (a.id - b.id));
+  const items = q.items.map((it) => {
+    const ex = it.extra || {};
+    const named = {};
+    for (const [fid, val] of Object.entries(ex)) {
+      const f = fmap.get(String(fid));
+      if (f && String(val || '').trim()) named[f.name] = String(val);
+    }
+    return Object.assign({}, it, { extra: named, extra_by_id: ex });
+  });
+
+  const custom = ordered
+    .filter((f) => items.some((it) => it.extra[f.name] !== undefined))
+    .map((f) => ({ id: f.id, name: f.name, unit: f.unit || '', kind: f.kind }));
+
   return {
     company: s.quote_company || s.company_name || '',
     contact: s.quote_contact || '',
@@ -471,7 +504,8 @@ function exportData(db, id, settings) {
     customer_short: q.customer_short || '',
     project_name: q.project_name || '',
     total_amount: money(q.total_amount),
-    items: q.items.map((it) => ({
+    custom_columns: custom,
+    items: items.map((it) => ({
       seq: it.seq,
       item_name: it.item_name,
       spec: [it.valve_type, it.size_range, it.pressure_rating, it.body_material, it.connection_type]
@@ -487,7 +521,8 @@ function exportData(db, id, settings) {
       discount: it.discount,
       subtotal: money(it.subtotal),
       delivery_days: it.delivery_days,
-      remark: it.remark
+      remark: it.remark,
+      extra: it.extra
     }))
   };
 }

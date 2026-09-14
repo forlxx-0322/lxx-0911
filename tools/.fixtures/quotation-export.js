@@ -23,7 +23,14 @@ function buildWorkbookAoa(d, XLSX) {
   };
   const fmt = (v) => money(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const COLS = 8;
+  /* 自定义列：只把本单真的填过值的列排进单据（与 web/js/quotation-drawer.js 同源逻辑） */
+  const custom = (d.custom_columns || []).filter((c) => (d.items || []).some(
+    (it) => it.extra && String(it.extra[c.name] || '').trim() !== ''
+  ));
+
+  const COLS = 8 + custom.length;
+  const C_CUSTOM0 = 3;
+  const C_QTY = C_CUSTOM0 + custom.length;
   const aoa = [];
   const merges = [];
   const rowMeta = [];
@@ -46,20 +53,32 @@ function buildWorkbookAoa(d, XLSX) {
   }
   blank(4);
 
-  push(['序号', '产品名称', '规格型号', '数量', '单位', '单价(元)', '折扣', '小计(元)'],
-    { bold: true, size: 10, align: 'center', height: 20, border: true, fill: true });
+  const header = ['序号', '产品名称', '规格型号'];
+  for (const c of custom) header.push(c.unit ? `${c.name}（${c.unit}）` : c.name);
+  header.push('数量', '单位', '单价(元)', '折扣', '小计(元)');
+  push(header, { bold: true, size: 10, align: 'center', height: 20, border: true, fill: true });
+
+  const alignRight = [C_QTY, C_QTY + 2, C_QTY + 4];
+  const alignCenter = [0, C_QTY + 1, C_QTY + 3];
+  custom.forEach((c, i) => { if (c.kind === 'number') alignRight.push(C_CUSTOM0 + i); });
 
   for (const it of (d.items || [])) {
-    push([
-      it.seq, it.item_name || '', it.spec || '', it.quantity, it.unit || '',
+    const row = [it.seq, it.item_name || '', it.spec || ''];
+    for (const c of custom) {
+      row.push((it.extra && it.extra[c.name] !== undefined) ? it.extra[c.name] : '');
+    }
+    row.push(it.quantity, it.unit || '',
       fmt(it.unit_price),
       it.discount ? `${Math.round(money(it.discount) * 10000) / 100}%` : '—',
-      fmt(it.subtotal)
-    ], { size: 10, height: 18, border: true, alignRight: [3, 5, 7], alignCenter: [0, 4, 6] });
+      fmt(it.subtotal));
+    push(row, { size: 10, height: 18, border: true, alignRight, alignCenter });
   }
 
-  r = push(['合计', '', '', '', '', '', '', fmt(d.total_amount)], { bold: true, size: 11, height: 22, border: true });
-  merges.push({ s: { r, c: 0 }, e: { r, c: 6 } });
+  const totalRow = new Array(COLS).fill('');
+  totalRow[0] = '合计';
+  totalRow[COLS - 1] = fmt(d.total_amount);
+  r = push(totalRow, { bold: true, size: 11, height: 22, border: true });
+  merges.push({ s: { r, c: 0 }, e: { r, c: COLS - 2 } });
   blank(4);
 
   const clause = [
@@ -79,8 +98,9 @@ function buildWorkbookAoa(d, XLSX) {
 
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [
-    { wch: 6 }, { wch: 18 }, { wch: 30 }, { wch: 8 },
-    { wch: 6 }, { wch: 13 }, { wch: 8 }, { wch: 15 }
+    { wch: 6 }, { wch: 18 }, { wch: 30 },
+    ...custom.map(() => ({ wch: 14 })),
+    { wch: 8 }, { wch: 6 }, { wch: 13 }, { wch: 8 }, { wch: 15 }
   ];
   ws['!merges'] = merges;
 

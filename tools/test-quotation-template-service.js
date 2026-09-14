@@ -41,7 +41,13 @@ function makeDb() {
     body_material TEXT NOT NULL DEFAULT '', connection_type TEXT NOT NULL DEFAULT '',
     quantity REAL NOT NULL DEFAULT 1, unit TEXT NOT NULL DEFAULT '台',
     delivery_days INTEGER NOT NULL DEFAULT 0, remark TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL)`);
+    extra TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)`);
+  /* 报价自定义列的列定义表（v7 起）：按真实结构建出来，保证测的是真实路径 */
+  db.exec(`CREATE TABLE quotation_fields (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'text',
+    options TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '', sort INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1, remark TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL, deleted_at TEXT)`);
   db.exec(`CREATE TABLE quotations (
     id INTEGER PRIMARY KEY AUTOINCREMENT, project_id INTEGER, customer_id INTEGER,
     quote_no TEXT, version INTEGER DEFAULT 1, status TEXT DEFAULT '草稿',
@@ -50,7 +56,8 @@ function makeDb() {
     id INTEGER PRIMARY KEY AUTOINCREMENT, quotation_id INTEGER, seq INTEGER,
     item_name TEXT, valve_type TEXT, size_range TEXT, pressure_rating TEXT,
     body_material TEXT, connection_type TEXT, quantity REAL, unit TEXT,
-    unit_price REAL, discount REAL, subtotal REAL, delivery_days INTEGER, remark TEXT)`);
+    unit_price REAL, discount REAL, subtotal REAL, delivery_days INTEGER, remark TEXT,
+    extra TEXT NOT NULL DEFAULT '{}')`);
   db.exec(`CREATE TABLE activity_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT, entity_type TEXT, entity_id INTEGER,
     action TEXT, summary TEXT, detail TEXT, created_at TEXT)`);

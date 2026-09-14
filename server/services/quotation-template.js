@@ -14,6 +14,8 @@
  */
 'use strict';
 
+const fieldsvc = require('./quotation-field');
+
 const plain = (r) => (r === undefined || r === null ? r : Object.assign({}, r));
 const plainAll = (rows) => (rows || []).map(plain);
 
@@ -23,7 +25,7 @@ const TEMPLATE_FIELDS = ['name', 'category', 'description', 'unit', 'sort', 'ena
 /** 模板明细行可写字段白名单（注意：**不含单价/折扣/小计**） */
 const ITEM_FIELDS = [
   'item_name', 'valve_type', 'size_range', 'pressure_rating', 'body_material',
-  'connection_type', 'quantity', 'unit', 'delivery_days', 'remark'
+  'connection_type', 'quantity', 'unit', 'delivery_days', 'remark', 'extra'
 ];
 
 function now() {
@@ -43,8 +45,8 @@ function num(v, fallback) {
   return Number.isFinite(n) ? n : (fallback === undefined ? 0 : fallback);
 }
 
-/** 归一化模板明细行 */
-function normalizeItem(raw, seq) {
+/** 归一化模板明细行（extra 与报价明细共用同一套自定义列） */
+function normalizeItem(raw, seq, db, extraIds) {
   const d = pick(raw, ITEM_FIELDS);
   const str = (k, dflt) => String(d[k] === undefined || d[k] === null ? (dflt || '') : d[k]).trim();
   return {
@@ -58,14 +60,18 @@ function normalizeItem(raw, seq) {
     quantity: num(d.quantity, 1),
     unit: str('unit', '台') || '台',
     delivery_days: Math.round(num(d.delivery_days, 0)),
-    remark: str('remark')
+    remark: str('remark'),
+    extra: db
+      ? fieldsvc.normalizeExtra(db, d.extra, extraIds)
+      : (d.extra === undefined ? '{}' : JSON.stringify(fieldsvc.parseExtra(d.extra)))
   };
 }
 
 /** 整行没实质内容即视为空行（丢弃，避免模板里存一堆空行） */
 function isBlankItem(it) {
   return !it.item_name && !it.valve_type && !it.size_range && !it.pressure_rating
-    && !it.body_material && !it.connection_type && !it.remark;
+    && !it.body_material && !it.connection_type && !it.remark
+    && !fieldsvc.extraHasValue(it.extra);
 }
 
 /* ------------------------------------------------------------------ */
@@ -106,7 +112,7 @@ function getTemplate(db, id) {
   if (!t) return null;
   const items = plainAll(db.prepare(
     'SELECT * FROM quotation_template_items WHERE template_id = ? ORDER BY seq ASC, id ASC'
-  ).all(Number(id)));
+  ).all(Number(id))).map((it) => Object.assign(it, { extra: fieldsvc.parseExtra(it.extra) }));
   return Object.assign(plain(t), { items });
 }
 
@@ -134,7 +140,8 @@ function saveTemplate(db, payload) {
   if (data.enabled !== undefined) data.enabled = num(data.enabled, 1) ? 1 : 0;
 
   const rawItems = Array.isArray(p.items) ? p.items : [];
-  const items = rawItems.map((r, i) => normalizeItem(r, i + 1)).filter((it) => !isBlankItem(it));
+  const extraIds = fieldsvc.liveFieldIds(db);
+  const items = rawItems.map((r, i) => normalizeItem(r, i + 1, db, extraIds)).filter((it) => !isBlankItem(it));
   items.forEach((it, i) => { it.seq = i + 1; });
 
   if (!items.length) {
@@ -174,11 +181,12 @@ function saveTemplate(db, payload) {
     db.prepare('DELETE FROM quotation_template_items WHERE template_id = ?').run(tid);
     const ins = db.prepare(`INSERT INTO quotation_template_items
       (template_id, seq, item_name, valve_type, size_range, pressure_rating, body_material,
-       connection_type, quantity, unit, delivery_days, remark, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+       connection_type, quantity, unit, delivery_days, remark, extra, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const it of items) {
       ins.run(tid, it.seq, it.item_name, it.valve_type, it.size_range, it.pressure_rating,
-        it.body_material, it.connection_type, it.quantity, it.unit, it.delivery_days, it.remark, ts);
+        it.body_material, it.connection_type, it.quantity, it.unit, it.delivery_days, it.remark,
+        it.extra, ts);
     }
 
     db.prepare(`INSERT INTO activity_logs (entity_type, entity_id, action, summary, detail, created_at)
@@ -204,7 +212,7 @@ function saveFromQuotation(db, quotationId, payload) {
 
   const items = plainAll(db.prepare(
     'SELECT * FROM quotation_items WHERE quotation_id = ? ORDER BY seq ASC, id ASC'
-  ).all(qid));
+  ).all(qid)).map((it) => Object.assign(it, { extra: fieldsvc.parseExtra(it.extra) }));
   if (!items.length) {
     const e = new Error('该报价单没有明细行，无法沉淀为模板'); e.status = 400; e.code = 'NO_ITEMS'; throw e;
   }
@@ -212,7 +220,8 @@ function saveFromQuotation(db, quotationId, payload) {
   const name = String(p.name || '').trim()
     || `来自报价单 ${q.quote_no || qid}（${items.length} 行）`;
 
-  /* 只带规格与数量，**不带价格**（价格随项目与行情变，存进模板易报错价） */
+  /* 只带规格与数量，**不带价格**（价格随项目与行情变，存进模板易报错价）；
+     自定义列的值属于"规格"，一并沉淀 */
   return saveTemplate(db, {
     name,
     category: p.category || '',
@@ -227,7 +236,8 @@ function saveFromQuotation(db, quotationId, payload) {
       quantity: it.quantity,
       unit: it.unit,
       delivery_days: it.delivery_days,
-      remark: it.remark
+      remark: it.remark,
+      extra: it.extra
     }))
   });
 }
@@ -261,6 +271,8 @@ function applyTemplate(db, id) {
       unit: it.unit || t.unit || '台',
       delivery_days: it.delivery_days,
       remark: it.remark,
+      /* 自定义列的值随模板带出（属于规格，不属于价格） */
+      extra: it.extra || {},
       /* 价格留空由使用者填写 */
       unit_price: '',
       discount: 0

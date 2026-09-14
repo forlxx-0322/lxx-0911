@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 数据库层 —— 客户管理系统
  *
  * 职责：
@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
 
 /* ------------------------------------------------------------------ */
 /* 13 张表结构                                                          */
@@ -397,6 +397,7 @@ const TABLES = [
     subtotal        REAL NOT NULL DEFAULT 0,
     delivery_days   INTEGER NOT NULL DEFAULT 0,
     remark          TEXT NOT NULL DEFAULT '',
+    extra           TEXT NOT NULL DEFAULT '{}',
     created_at      TEXT NOT NULL
   )`,
 
@@ -434,7 +435,33 @@ const TABLES = [
     unit            TEXT NOT NULL DEFAULT '台',
     delivery_days   INTEGER NOT NULL DEFAULT 0,
     remark          TEXT NOT NULL DEFAULT '',
+    extra           TEXT NOT NULL DEFAULT '{}',
     created_at      TEXT NOT NULL
+  )`,
+
+  /* 21. 报价自定义列（v7 新增）
+   *
+   * 为什么用「列定义 + JSON 明细」而不是给明细表加列：
+   *   介质、设计压力、设计温度、操作压力/温度、环境温度、泄露等级、阀门标准、
+   *   执行器型号、定位器、电磁阀、限位开关、过滤减压阀、气控阀…… 这些字段
+   *   因客户而异，且**列数不封顶**。若每个新列都 ALTER TABLE，
+   *   一是要不停迁移，二是列名会随用户改名而失控。
+   *   所以：列定义存本表，明细行的值存 `extra` 字段（JSON，键=列 id）。
+   *
+   * 键用列 id 而不是列名，是为了**改名不丢值**：
+   *   「泄露等级」改成「泄漏等级」，历史报价单里的值照样跟着显示。 */
+  `CREATE TABLE IF NOT EXISTS quotation_fields (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    kind        TEXT NOT NULL DEFAULT 'text',   -- text(文本) | number(数字) | select(下拉候选)
+    options     TEXT NOT NULL DEFAULT '',       -- kind=select 时的候选值，逗号分隔
+    unit        TEXT NOT NULL DEFAULT '',       -- 单位（如 MPa / ℃），导出时并进表头
+    sort        INTEGER NOT NULL DEFAULT 0,
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    remark      TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    deleted_at  TEXT
   )`];
 
 /* ------------------------------------------------------------------ */
@@ -492,7 +519,9 @@ const INDEXES = [
   'CREATE INDEX IF NOT EXISTS idx_quotation_templates_sort  ON quotation_templates(sort, id)',
   'CREATE INDEX IF NOT EXISTS idx_quotation_templates_del   ON quotation_templates(deleted_at)',
   'CREATE INDEX IF NOT EXISTS idx_quotation_templates_cat   ON quotation_templates(category)',
-  'CREATE INDEX IF NOT EXISTS idx_quo_tpl_items_template    ON quotation_template_items(template_id, seq)'
+  'CREATE INDEX IF NOT EXISTS idx_quo_tpl_items_template    ON quotation_template_items(template_id, seq)',
+  /* 报价自定义列（v7）：按删除标记 + 排序取列 */
+  'CREATE INDEX IF NOT EXISTS idx_quotation_fields_sort     ON quotation_fields(deleted_at, sort, id)'
 ];
 
 /* ------------------------------------------------------------------ */
@@ -854,6 +883,51 @@ const MIGRATIONS = [
       ]) db.exec(sql);
 
       return `新增表 ${created.join('、')}`;
+    }
+  },
+
+  /* v6 → v7：报价自定义列
+   *
+   * 做两件事：
+   *   1. 新增 quotation_fields（列定义表）
+   *   2. 给 quotation_items / quotation_template_items 各加一列 extra（JSON 值）
+   *
+   * 纯新增（不改既有列、不回填、不动既有数据），旧版本读这两张表时
+   * 多出的 extra 列不影响既有查询；即便不恢复备份，删掉 extra 列也能退回 v6。 */
+  {
+    version: 7,
+    note: '报价自定义列：新增 quotation_fields 表，明细表加 extra 列',
+    run(db) {
+      const done = [];
+
+      const hasCol = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all()
+        .some((c) => c.name === col);
+
+      for (const table of ['quotation_items', 'quotation_template_items']) {
+        if (!hasCol(table, 'extra')) {
+          db.exec(`ALTER TABLE ${table} ADD COLUMN extra TEXT NOT NULL DEFAULT '{}'`);
+          done.push(`${table}.extra`);
+        }
+      }
+
+      db.exec(`CREATE TABLE IF NOT EXISTS quotation_fields (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT NOT NULL,
+        kind        TEXT NOT NULL DEFAULT 'text',
+        options     TEXT NOT NULL DEFAULT '',
+        unit        TEXT NOT NULL DEFAULT '',
+        sort        INTEGER NOT NULL DEFAULT 0,
+        enabled     INTEGER NOT NULL DEFAULT 1,
+        remark      TEXT NOT NULL DEFAULT '',
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL,
+        deleted_at  TEXT
+      )`);
+      done.push('quotation_fields');
+
+      db.exec('CREATE INDEX IF NOT EXISTS idx_quotation_fields_sort ON quotation_fields(deleted_at, sort, id)');
+
+      return `新增列 ${done.join('、')}`;
     }
   }
 ];

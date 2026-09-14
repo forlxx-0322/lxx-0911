@@ -81,6 +81,13 @@ if (process.argv.includes('--all')) {
     }
     /* 清掉测试期间新增的自定义字典项，保留系统内置项 */
     n.dict = db.prepare('DELETE FROM dict WHERE is_system = 0').run().changes;
+    /* 报价自定义列是**全局配置**，测试建的列必须带走；
+       只删带测试前缀的，使用者自己建的列一律不动。 */
+    try {
+      n.quotation_fields = db.prepare(
+        "DELETE FROM quotation_fields WHERE name LIKE '%【列测试%' OR name LIKE '%测试列%'"
+      ).run().changes;
+    } catch (_) { /* 老库还没这张表 */ }
     db.exec('COMMIT');
     console.log('已清空全部业务数据：');
     for (const [t, c] of Object.entries(n)) console.log(`  ${t}\t${c} 条`);

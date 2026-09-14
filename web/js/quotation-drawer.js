@@ -31,7 +31,9 @@ window.CRM = window.CRM || {};
     return {
       item_name: '', valve_type: '', size_range: '', pressure_rating: '',
       body_material: '', connection_type: '', quantity: 1, unit: '台',
-      unit_price: '', discount: 0, delivery_days: '', remark: ''
+      unit_price: '', discount: 0, delivery_days: '', remark: '',
+      /* 自定义列的值：键 = 列 id，见 quotation-fields.js */
+      extra: {}
     };
   }
 
@@ -61,7 +63,9 @@ window.CRM = window.CRM || {};
         /* 报价模板 */
         templates: [],
         templateId: '',
-        applyingTpl: false
+        applyingTpl: false,
+        /* 自定义列（报价单与模板共用同一套列，全局管理） */
+        fields: []
       };
     },
     computed: {
@@ -79,10 +83,39 @@ window.CRM = window.CRM || {};
       async modelValue(open) {
         if (!open) return;
         this.reset();
-        await this.loadTemplates();
+        this.syncFields();
+        await Promise.all([this.loadTemplates(), this.loadFields()]);
       }
     },
+    created() {
+      /* 列管理抽屉是全局单例：在别处增删列后，这里要跟着换表头 */
+      this.offFields = CRM.quotationFields.onChange((list) => { this.fields = list; });
+    },
+    beforeUnmount() {
+      if (this.offFields) this.offFields();
+    },
     methods: {
+      /* ---------------- 自定义列 ---------------- */
+      /** 先用缓存里的列渲染，避免打开抽屉时表头跳一下 */
+      syncFields() { this.fields = CRM.quotationFields.enabled(); },
+
+      async loadFields() {
+        try {
+          await CRM.quotationFields.load(true);
+          this.syncFields();
+        } catch (_) {
+          /* 读列失败不影响报价本身，按无自定义列继续 */
+        }
+      },
+
+      openFields() { CRM.quotationFields.open(); },
+
+      /** 列宽按列名长度估，避免「设计压力（MPa）」被截断 */
+      fieldWidth(f) {
+        const label = String(f.name || '') + (f.unit ? `（${f.unit}）` : '');
+        return Math.min(160, Math.max(84, label.length * 13 + 26)) + 'px';
+      },
+
       /* ---------------- 报价模板 ---------------- */
       async loadTemplates() {
         try {
@@ -128,7 +161,9 @@ window.CRM = window.CRM || {};
             pressure_rating: it.pressure_rating, body_material: it.body_material,
             connection_type: it.connection_type, quantity: it.quantity, unit: it.unit,
             unit_price: '', discount: 0,
-            delivery_days: it.delivery_days || '', remark: it.remark
+            delivery_days: it.delivery_days || '', remark: it.remark,
+            /* 自定义列的值随模板带出（属于规格，不属于价格） */
+            extra: Object.assign({}, it.extra || {})
           }));
           if (!rows.length) { CRM.toast('该模板没有明细行', 'error'); return; }
           this.form.items = replace ? rows : this.form.items.concat(rows);
@@ -161,7 +196,9 @@ window.CRM = window.CRM || {};
               item_name: it.item_name, valve_type: it.valve_type, size_range: it.size_range,
               pressure_rating: it.pressure_rating, body_material: it.body_material,
               connection_type: it.connection_type, quantity: it.quantity, unit: it.unit,
-              delivery_days: it.delivery_days, remark: it.remark
+              delivery_days: it.delivery_days, remark: it.remark,
+              /* 自定义列一并沉淀，模板才是"完整的规格组合" */
+              extra: Object.assign({}, it.extra || {})
             }))
           });
           CRM.toast(`已存为模板「${name}」（${r.item_count} 行规格，不含价格）`, 'success', 5000);
@@ -209,7 +246,8 @@ window.CRM = window.CRM || {};
                 unit_price: it.unit_price,
                 /* 库里存比例，界面显示百分比 */
                 discount: it.discount ? Math.round(Number(it.discount) * 10000) / 100 : 0,
-                delivery_days: it.delivery_days || '', remark: it.remark
+                delivery_days: it.delivery_days || '', remark: it.remark,
+                extra: Object.assign({}, it.extra || {})
               }))
               : [blankItem()]
           };
@@ -238,6 +276,8 @@ window.CRM = window.CRM || {};
         for (const k of ['item_name', 'valve_type', 'size_range', 'pressure_rating', 'body_material', 'connection_type', 'unit', 'unit_price', 'discount', 'delivery_days']) {
           dst[k] = src[k];
         }
+        /* 自定义列也一起复制：同规格多行时这才是省事的关键 */
+        dst.extra = Object.assign({}, src.extra || {});
         this.form.items.splice(i + 1, 0, dst);
       },
 
@@ -315,6 +355,10 @@ window.CRM = window.CRM || {};
         <div class="quo-items-head">
           <div class="quo-items-title">报价明细</div>
           <div style="flex:1"></div>
+          <button class="btn btn-sm" type="button" @click="openFields"
+                  title="增删自定义列：介质、设计压力、设计温度、泄露等级、执行器型号…（列数不限）">
+            ⚙ 自定义列<span v-if="fields.length">（{{ fields.length }}）</span>
+          </button>
           <button class="btn btn-sm" type="button" @click="addRow">+ 增加一行</button>
         </div>
 
@@ -358,6 +402,10 @@ window.CRM = window.CRM || {};
                 <th style="width:96px">压力</th>
                 <th style="width:104px">阀体材质</th>
                 <th style="width:88px">连接</th>
+                <!-- 自定义列（列名由用户在「自定义列」里定义，列数不限） -->
+                <th v-for="f in fields" :key="f.id" :style="{width: fieldWidth(f)}">
+                  {{ f.name }}<span v-if="f.unit" class="quo-th-unit">（{{ f.unit }}）</span>
+                </th>
                 <th style="width:72px">数量</th>
                 <th style="width:56px">单位</th>
                 <th style="width:96px">单价(元)</th>
@@ -396,6 +444,13 @@ window.CRM = window.CRM || {};
                     <option v-for="o in (dict.connection_type || [])" :key="o" :value="o"></option>
                   </datalist>
                 </td>
+                <!-- 自定义列的值：v-model 直接落在 extra[列id] 上 -->
+                <td v-for="f in fields" :key="f.id">
+                  <input class="input input-sm" :class="{ num: f.kind === 'number' }"
+                         :type="f.kind === 'number' ? 'number' : 'text'"
+                         :list="f.kind === 'select' ? ('qf-' + f.id) : null"
+                         v-model="it.extra[f.id]" />
+                </td>
                 <td><input class="input input-sm num" type="number" min="0" step="any" v-model="it.quantity" /></td>
                 <td><input class="input input-sm" v-model="it.unit" /></td>
                 <td><input class="input input-sm num" type="number" min="0" step="any" v-model="it.unit_price" /></td>
@@ -413,7 +468,7 @@ window.CRM = window.CRM || {};
             </tbody>
             <tfoot>
               <tr>
-                <td colspan="10" class="quo-total-label">合计（{{ form.items.length }} 行）</td>
+                <td :colspan="10 + fields.length" class="quo-total-label">合计（{{ form.items.length }} 行）</td>
                 <td class="quo-total">{{ fmt(previewTotal) }}</td>
                 <td colspan="3"></td>
               </tr>
@@ -421,12 +476,25 @@ window.CRM = window.CRM || {};
           </table>
         </div>
 
+        <!-- 下拉候选值：统一放表格外，避免每行重复渲染 datalist -->
+        <div style="display:none">
+          <template v-for="f in fields" :key="f.id">
+            <datalist v-if="f.kind === 'select'" :id="'qf-' + f.id">
+              <option v-for="o in (f.options_list || [])" :key="o" :value="o"></option>
+            </datalist>
+          </template>
+        </div>
+
         <div class="note mt-3">
           <c-icon name="alert" :size="14" />
           <div style="font-size:var(--fs-xs)">
             折扣填百分比（填 10 表示让价 10%）。金额保存时由服务端重新计算，
             与这里的预览一致；报价合计<strong>不会自动改动项目合同额</strong>，
-            中标后可在报价单详情里一键回填。
+            中标后可在报价单详情里一键回填。<br>
+            规格项不够用时点「⚙ 自定义列」自己加（介质、设计压力、设计温度、操作压力、
+            操作温度、环境温度、泄露等级、阀门标准、执行器型号、定位器、电磁阀、限位开关、
+            过滤减压阀、气控阀……列数不限）；<strong>报价单与报价模板共用同一套列</strong>，
+            套用模板时自定义列的值一起带出。
           </div>
         </div>
 
@@ -479,7 +547,18 @@ window.CRM = window.CRM || {};
     };
     const fmt = (v) => money(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    const COLS = 8;
+    /* 自定义列：只把本单真的填过值的列排进单据，免得导出一堆空列把表格撑宽 */
+    const custom = (d.custom_columns || []).filter((c) => (d.items || []).some(
+      (it) => it.extra && String(it.extra[c.name] || '').trim() !== ''
+    ));
+
+    const COLS = 8 + custom.length;
+    /* 明细表各列的落位（自定义列插在「规格型号」之后，数量之前） */
+    const C_SEQ = 0, C_NAME = 1, C_SPEC = 2;
+    const C_CUSTOM0 = 3;
+    const C_QTY = C_CUSTOM0 + custom.length;
+    const C_UNIT = C_QTY + 1, C_PRICE = C_QTY + 2, C_DISC = C_QTY + 3, C_SUM = C_QTY + 4;
+
     const aoa = [];
     const merges = [];
     const rowMeta = [];   // { bold?, size?, align?, height? }
@@ -506,22 +585,37 @@ window.CRM = window.CRM || {};
     blank(4);
 
     /* ---- 明细表头 ---- */
-    const header = ['序号', '产品名称', '规格型号', '数量', '单位', '单价(元)', '折扣', '小计(元)'];
+    const header = ['序号', '产品名称', '规格型号'];
+    for (const c of custom) header.push(c.unit ? `${c.name}（${c.unit}）` : c.name);
+    header.push('数量', '单位', '单价(元)', '折扣', '小计(元)');
     push(header, { bold: true, size: 10, align: 'center', height: 20, border: true, fill: true });
 
     /* ---- 明细行 ---- */
+    const alignRight = [C_QTY, C_PRICE, C_SUM];
+    const alignCenter = [C_SEQ, C_UNIT, C_DISC];
+    for (let i = 0; i < custom.length; i++) {
+      /* 数字列右对齐，读数更顺眼 */
+      if (custom[i].kind === 'number') alignRight.push(C_CUSTOM0 + i);
+    }
+
     for (const it of (d.items || [])) {
-      push([
-        it.seq, it.item_name || '', it.spec || '', it.quantity, it.unit || '',
+      const row = [it.seq, it.item_name || '', it.spec || ''];
+      for (const c of custom) {
+        row.push((it.extra && it.extra[c.name] !== undefined) ? it.extra[c.name] : '');
+      }
+      row.push(it.quantity, it.unit || '',
         fmt(it.unit_price),
         it.discount ? `${Math.round(money(it.discount) * 10000) / 100}%` : '—',
-        fmt(it.subtotal)
-      ], { size: 10, height: 18, border: true, alignRight: [3, 5, 7], alignCenter: [0, 4, 6] });
+        fmt(it.subtotal));
+      push(row, { size: 10, height: 18, border: true, alignRight, alignCenter });
     }
 
     /* ---- 合计 ---- */
-    r = push(['合计', '', '', '', '', '', '', fmt(d.total_amount)], { bold: true, size: 11, height: 22, border: true });
-    merges.push({ s: { r, c: 0 }, e: { r, c: 6 } });
+    const totalRow = new Array(COLS).fill('');
+    totalRow[0] = '合计';
+    totalRow[COLS - 1] = fmt(d.total_amount);
+    r = push(totalRow, { bold: true, size: 11, height: 22, border: true });
+    merges.push({ s: { r, c: 0 }, e: { r, c: COLS - 2 } });
 
     blank(4);
 
@@ -545,10 +639,11 @@ window.CRM = window.CRM || {};
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-    /* 列宽按 A4 横向排版调（单位约等于字符数） */
+    /* 列宽按 A4 横向排版调（单位约等于字符数）；自定义列给固定宽度 */
     ws['!cols'] = [
-      { wch: 6 }, { wch: 18 }, { wch: 30 }, { wch: 8 },
-      { wch: 6 }, { wch: 13 }, { wch: 8 }, { wch: 15 }
+      { wch: 6 }, { wch: 18 }, { wch: 30 },
+      ...custom.map(() => ({ wch: 14 })),
+      { wch: 8 }, { wch: 6 }, { wch: 13 }, { wch: 8 }, { wch: 15 }
     ];
     ws['!merges'] = merges;
 
